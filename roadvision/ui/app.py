@@ -42,6 +42,9 @@ class RoadVisionApp:
         self._last_display_frame = None
         self._camera_infos: list[CameraInfo] = []
         self._camera_scan_running = False
+        self._active_run_id: int | None = None
+        self._closing = False
+        self._closed = False
 
         self.source_kind = tk.StringVar(value=SourceKind.CAMERA.value)
         self.source_path = tk.StringVar(value="")
@@ -380,8 +383,9 @@ class RoadVisionApp:
             self._update_start_availability()
 
     def _reset_for_source_change(self, message: str) -> None:
+        self._active_run_id = None
         if self.engine.state != EngineState.IDLE:
-            self.engine.stop()
+            self.engine.request_stop()
         self._discard_pending_events()
         self._clear_preview()
         self.performance_text.set(f"Aygıt: {self.engine.device.upper()}")
@@ -486,8 +490,16 @@ class RoadVisionApp:
         return bool(self.source_path.get() and Path(self.source_path.get()).is_file())
 
     def _update_start_availability(self) -> None:
-        if self.engine.state in (EngineState.STARTING, EngineState.RUNNING, EngineState.STOPPING):
-            self.start_button.configure(state="normal")
+        if self._closing or self._closed:
+            self.start_button.configure(state="disabled")
+            return
+        if self.engine.state in (EngineState.STARTING, EngineState.RUNNING):
+            self.start_button.configure(
+                state="normal" if self._active_run_id is not None else "disabled"
+            )
+            return
+        if self.engine.state != EngineState.IDLE:
+            self.start_button.configure(state="disabled")
             return
         ready = self._source_is_ready() and bool(self._selected_models())
         self.start_button.configure(state="normal" if ready else "disabled")
@@ -510,8 +522,19 @@ class RoadVisionApp:
         return SourceFactory.create_video(path)
 
     def _toggle_processing(self) -> None:
-        if self.engine.state in (EngineState.STARTING, EngineState.RUNNING, EngineState.STOPPING):
-            self.engine.stop()
+        if self._closing or self._closed:
+            return
+        if self.engine.state in (EngineState.STARTING, EngineState.RUNNING):
+            self.engine.request_stop()
+            self.start_button.configure(
+                text="Durduruluyor…",
+                style="Danger.TButton",
+                state="disabled",
+            )
+            self.status_text.set("İşlem durduruluyor…")
+            self.status_dot.configure(fg="#ffd166")
+            return
+        if self.engine.state != EngineState.IDLE:
             self._set_running_ui(False)
             return
         try:
@@ -534,11 +557,13 @@ class RoadVisionApp:
                 "Kalite": PerformanceProfile.QUALITY,
             }
             self.engine.set_performance_profile(profiles[self.performance_profile.get()])
-            self.engine.start(source, selected)
+            self._active_run_id = self.engine.start(source, selected)
             self._set_running_ui(True)
             self.status_text.set("Kaynak hazırlanıyor…")
             self.status_dot.configure(fg="#ffd166")
         except Exception as exc:
+            self._active_run_id = None
+            self._set_running_ui(False)
             messagebox.showerror("Başlatılamadı", str(exc), parent=self.root)
 
     def _set_running_ui(self, running: bool) -> None:
@@ -552,20 +577,44 @@ class RoadVisionApp:
     def _poll_events(self) -> None:
         latest_frame: EngineEvent | None = None
         try:
-            while True:
+            while not self._closed:
                 event = self._events.get_nowait()
+                if event.kind == "shutdown_complete":
+                    self._handle_event(event)
+                    continue
+                if not self._event_belongs_to_active_run(event):
+                    continue
                 if event.kind == "frame":
                     latest_frame = event
                 else:
                     self._handle_event(event)
         except queue.Empty:
             pass
+        if self._closed:
+            return
         if latest_frame is not None:
             self._handle_event(latest_frame)
+        self._update_start_availability()
         if self.root.winfo_exists():
             self.root.after(33, self._poll_events)
 
+    def _event_belongs_to_active_run(self, event: EngineEvent) -> bool:
+        return self._active_run_id is not None and event.run_id == self._active_run_id
+
     def _handle_event(self, event: EngineEvent) -> None:
+        if event.kind == "shutdown_complete":
+            if self._closing and not self._closed:
+                self._closed = True
+                self.root.destroy()
+            return
+        if not self._event_belongs_to_active_run(event):
+            return
+        if self.engine.state == EngineState.STOPPING and event.kind not in {
+            "error",
+            "stopped",
+        }:
+            return
+
         if event.kind == "frame" and event.frame is not None:
             self._last_display_frame = event.frame
             self._display_frame(event.frame)
@@ -584,11 +633,13 @@ class RoadVisionApp:
             self.status_text.set(event.message + " Son kare üzerinde model seçimini değiştirebilirsiniz.")
             self.status_dot.configure(fg="#ffd166")
         elif event.kind == "error":
+            self._active_run_id = None
             self.status_text.set(event.message)
             self.status_dot.configure(fg=DANGER)
             self._set_running_ui(False)
             messagebox.showerror("İşlem hatası", event.message, parent=self.root)
         elif event.kind == "stopped":
+            self._active_run_id = None
             self.status_text.set(event.message)
             self.performance_text.set(f"Aygıt: {self.engine.device.upper()}")
             self._set_running_ui(False)
@@ -607,8 +658,15 @@ class RoadVisionApp:
             self._display_frame(self._last_display_frame)
 
     def _on_close(self) -> None:
-        self.engine.shutdown()
-        self.root.destroy()
+        if self._closing or self._closed:
+            return
+        self._closing = True
+        self._active_run_id = None
+        self._discard_pending_events()
+        self.start_button.configure(text="Başlat", style="Accent.TButton", state="disabled")
+        self.status_text.set("Uygulama kapatılıyor…")
+        self.status_dot.configure(fg="#ffd166")
+        self.engine.request_shutdown()
 
 
 def run_app() -> None:

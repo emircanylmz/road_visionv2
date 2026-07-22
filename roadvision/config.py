@@ -30,8 +30,8 @@ class ModelSpec:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    title: str = "RoadVision • Çoklu Model Test Arayüzü"
-    build: str = "v1.0.0"
+    title: str = "RoadVision"
+    build: str = "v1.0.1"
     camera_width: int = 1280
     camera_height: int = 720
     camera_fps: int = 30

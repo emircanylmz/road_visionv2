@@ -1,8 +1,8 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.0.0 — 22 Temmuz 2026
+**Kararlı sürüm:** v1.0.1 — 22 Temmuz 2026
 
-Sürüm kapsamı ve teslim notları için [VERSION_1.md](VERSION_1.md) dosyasına bakın.
+İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), hotfix ayrıntıları için [CHANGELOG.md](CHANGELOG.md) dosyasına bakın.
 
 Bu proje, `models.json` kataloğundaki YOLO modellerini kamera, fotoğraf veya video üzerinde tek tek ya da birlikte çalıştıran modüler bir masaüstü arayüzüdür. İşlem başladıktan sonra model seçimi ve modele özel güven eşiği değiştirilebilir; fotoğraflarda son kare otomatik olarak yeniden işlenir, kamera/video akışında yeni seçim takip eden karelere uygulanır.
 
@@ -66,6 +66,8 @@ Arayüzde:
 4. İşlem sürerken model kutularını açıp kapatabilirsiniz.
 
 Her modelin güven eşiği bağımsızdır. **Box göster** veya **Maske göster** kapatıldığında model arka planda tespit yapmaya ve istatistik üretmeye devam eder; yalnızca ilgili çizim önizlemede gösterilmez.
+
+v1.0.1'de kaynak türü, dosya veya kamera seçimi değiştirildiğinde etkin çalışma güvenli biçimde durdurulur; eski önizleme temizlenir ve düğme **Başlat** durumuna sıfırlanır. Durdurma tamamlanmadan yeni çalışma başlatılmaz.
 
 Model listesi `models.json` içindeki etkin kayıtlardan oluşturulur ve dikey olarak kaydırılabilir. Dosyaya eklenen yeni bir model, uygulama yeniden açıldığında listenin altında otomatik görünür.
 

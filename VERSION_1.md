@@ -2,6 +2,8 @@
 
 Yayın tarihi: **22 Temmuz 2026**
 
+> **Güncel hotfix:** v1.0.1, v1.0.0 teslimine yaşam döngüsü ve kaynak değişimi düzeltmelerini ekler. Ayrıntılar [CHANGELOG.md](CHANGELOG.md) dosyasındadır.
+
 Bu belge, RoadVision masaüstü uygulamasının ilk kararlı sürümünün kapsamını, çalışma biçimini ve teslim içeriğini açıklar.
 
 ## Sürüm özeti
@@ -102,4 +104,8 @@ Ultralytics ve PyTorch dahil `requirements.txt` bağımlılıklarının test ort
 - Mimari ve kullanım belgeleri
 - Kamera, kaynak, engine, model yapılandırması ve çizim davranışı testleri
 
-Bu sürüm, ilk kararlı Git etiketi olarak `v1.0.0` adıyla yayımlanmak üzere hazırlanmıştır.
+Bu sürüm, ilk kararlı Git etiketi olarak `v1.0.0` adıyla yayımlanmıştır.
+
+## v1.0.1 lifecycle hotfix
+
+v1.0.1 yeni model veya katalog özelliği eklemez. Her çalıştırmanın yaşam döngüsünü birbirinden ayırır; durdurma ve kapanış sırasında worker'ların güvenli biçimde tamamlanmasını sağlar. Kaynak türü, dosya veya kamera değiştiğinde etkin çalışma durdurulur, bekleyen eski görüntü temizlenir ve arayüz **Başlat** durumuna döner. Önceki çalışma tamamen sonlanmadan yeni çalışma başlatılmaz.
