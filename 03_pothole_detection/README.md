@@ -1,17 +1,26 @@
-# Pothole detection
+# Pothole ve rögar kapağı detection
 
-Secilen agirlik kaynagi:
+## Aktif model
 
-`/content/drive/MyDrive/pothole_training/pothole_yolo26s_768_v1/weights/best.pt`
+Uygulamanın `models.json` kataloğunda seçili ağırlık:
 
-Calisma klasoru:
+`pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt`
 
-`/content/drive/MyDrive/pothole_training/pothole_yolo26s_768_v1`
+Drive kaynağı:
 
-Hedef agirlik adi: `model.pt`.
+`/content/drive/MyDrive/pothole_manhole_training/selected_pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt`
 
-Best epoch `143`, early stopping epoch `178`.
+Sınıflar:
 
-Final test: precision `0.8115700518`, recall `0.7189542484`, mAP50 `0.7780710942`, mAP50-95 `0.4837072991`.
+- `0`: `pothole`
+- `1`: `manhole_cover`
 
-`test_results/` icinde F1, precision, PR ve recall egrileri ile iki confusion matrix bulunur.
+Best epoch `196`, early stopping epoch `231`.
+
+Final test: precision `0.899455`, recall `0.846949`, mAP50 `0.878024`, mAP50-95 `0.661832`.
+
+Aktif modelin ayrıntılı metrikleri, confusion matrix dosyaları, bilinen hata denetimi ve checksum kayıtları kendi alt klasöründedir.
+
+## Korunan eski model
+
+Eski tek sınıflı çukur modeli `model.pt`, ona ait `metrics.json` ve `test_results/` dosyaları karşılaştırma ve geri dönüş amacıyla değiştirilmeden korunur. Uygulama varsayılan olarak bu eski ağırlığı yüklemez.

@@ -23,10 +23,10 @@
     },
     {
       "id": "pothole",
-      "display_name": "Çukur Tespiti",
-      "short_name": "Çukur",
+      "display_name": "Çukur ve Rögar Kapağı Tespiti",
+      "short_name": "Çukur / Rögar",
       "task": "detect",
-      "weights": "03_pothole_detection/model.pt",
+      "weights": "03_pothole_detection/pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt",
       "input_size": 768,
       "color_bgr": [60, 80, 245],
       "enabled": true

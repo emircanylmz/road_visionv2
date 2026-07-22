@@ -1,0 +1,4 @@
+,actual_pothole,actual_manhole_cover,actual_background
+predicted_pothole,0.7450980392156863,0.017241379310344827,0.8
+predicted_manhole_cover,0.0,0.9482758620689655,0.2
+predicted_background,0.2549019607843137,0.034482758620689655,0.0
