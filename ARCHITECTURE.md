@@ -82,15 +82,40 @@ Aradaki `Queue(maxsize=1)` back-pressure stratejisidir. Kuyruk doluysa eski bekl
 
 Engine; `started`, `frame`, `status`, `source_ended`, `error` ve `stopped` olayları üretir. UI'a dair hiçbir bağımlılığı yoktur.
 
+Engine'e opsiyonel `EventJournal` enjekte edilir. UI günlüğü sağlamadığında `NullJournal` kullanılır; böylece başsız kullanım ve testler disk I/O'suna bağımlı kalmaz. Engine yaşam döngüsü olaylarını `app_event`, her modelin kare özetini `detection`, çalışma kapanışını ise `run_finished` ile bildirir.
+
+## Günlük katmanı
+
+### `LogRecord` ve `LogSink`
+
+`LogRecord`; zaman, seviye, kategori, mesaj, çalışma kimliği, model kimliği ve serbest biçimli payload alanlarından oluşan JSON/veritabanı dostu kayıt modelidir.
+
+`LogSink` hedeflerin `prepare_sink → write_record/flush → release_sink` sözleşmesidir:
+
+- `JsonlFileSink`: satır başına JSON yazar ve boyuta göre dosya döndürür.
+- `ConsoleSink`: uyarı ve hataları stderr'e taşır.
+- `SessionLogSink`: yazıcı thread'inden gelen kayıtları Tk ana thread'inin tüketebileceği sınırlı kuyruğa aktarır.
+
+### `EventJournal`
+
+`EventJournal` üretici çağrılarını sınırlı kuyruğa `put_nowait` ile bırakır. Tek yazıcı thread tekrar bastırmayı uygular ve kayıtları bütün sink'lere sıralı biçimde iletir. Bir sink'in hatası diğer hedefleri veya uygulamayı düşürmez. Kuyruk taşarsa üretici bekletilmez; düşen kayıt sayısı sonraki yazılabilen kaydın payload alanına eklenir.
+
+`DetectionSuppressor`, `(run_id, model_id)` anahtarında art arda aynı tespit imzasını tek kayda indirger. İmza değişiminde önceki serinin kare ve süre özeti, uzun sabit serilerde heartbeat, çalışma sonunda kapanış özeti üretilir.
+
+Varsayılan günlük kurulumu sırasıyla kullanıcı cache dizini ve geçici dizini dener; dosya hedefi oluşturulamazsa konsol hedefiyle çalışmayı sürdürür. Ayrıntılar [LOGGING.md](LOGGING.md) belgesindedir.
+
 ## UI katmanı
 
 ### `RoadVisionApp`
 
-Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme ve durum bilgisini yönetir. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme, durum bilgisi ve oturum günlüğünü yönetir. Sağ içerik alanı **Canlı Önizleme** ve **Oturum Günlüğü** sekmelerine ayrılır. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+
+`SessionLogSink` journal yazıcı thread'inde Tk nesnelerine dokunmaz. UI'ın mevcut 33 ms polling döngüsü bekleyen `LogRecord` nesnelerini ana thread'de tabloya aktarır. Oturum kuyruğu son 2.000, görünür tablo son 1.000 kaydı tutar; bu sınırlar uzun video/kamera çalışmalarında belleğin sınırsız büyümesini engeller.
 
 ## Hata ve kaynak yönetimi
 
 - Kaynak hazırlama ya da inference hatası `error` olayına çevrilir.
 - Kamera/video handle'ları hem normal bitişte hem durdurmada serbest bırakılır.
 - Uygulama kapanırken worker'lar durdurulur, ardından model cache'i temizlenir.
+- `shutdown_complete` olayı işlendiğinde journal kuyruğu boşaltılır, sink'ler flush edilip serbest bırakılır ve ardından Tk penceresi kapatılır.
 - Model dosyaları iş başlamadan registry üzerinden doğrulanır.

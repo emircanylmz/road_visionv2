@@ -7,6 +7,13 @@ from unittest.mock import Mock
 import numpy as np
 
 from roadvision.engine import EngineEvent, EngineState
+from roadvision.logbook import (
+    LogCategory,
+    LogLevel,
+    LogRecord,
+    NullJournal,
+    SessionLogSink,
+)
 from roadvision.ui.app import PREVIEW_PLACEHOLDER, RoadVisionApp
 
 
@@ -49,6 +56,7 @@ def configured_value(widget: Mock, key: str):
 class SourceResetTests(unittest.TestCase):
     def make_app(self, state: EngineState, run_id: int | None = 7) -> RoadVisionApp:
         app = RoadVisionApp.__new__(RoadVisionApp)
+        app._journal = NullJournal()  # type: ignore[attr-defined]
         app.engine = FakeEngine(state, run_id)  # type: ignore[assignment]
         app._active_run_id = app.engine.active_run_id  # type: ignore[attr-defined]
         app._closing = False
@@ -199,6 +207,35 @@ class SourceResetTests(unittest.TestCase):
 
         self.assertTrue(app._closed)
         app.root.destroy.assert_called_once_with()
+
+    def test_session_log_records_are_drained_into_live_table(self) -> None:
+        app = self.make_app(EngineState.IDLE, run_id=None)
+        app._session_log_sink = SessionLogSink()  # type: ignore[attr-defined]
+        app._session_log_count = 0  # type: ignore[attr-defined]
+        app.log_tree = Mock()  # type: ignore[attr-defined]
+        app.log_tree.get_children.return_value = ()
+        app.log_count_text = Mock()  # type: ignore[attr-defined]
+        app._session_log_sink.write_record(  # type: ignore[attr-defined]
+            LogRecord(
+                timestamp=100.0,
+                level=LogLevel.WARNING,
+                category=LogCategory.DETECTION,
+                message="Çukur Tespiti: 2 tespit",
+                run_id=4,
+                model_id="pothole",
+                payload={"object_count": 2},
+            )
+        )
+
+        app._poll_log_records()
+
+        app.log_tree.insert.assert_called_once()
+        values = app.log_tree.insert.call_args.kwargs["values"]
+        self.assertEqual(values[1:6], ("WARNING", "detection", 4, "pothole", "Çukur Tespiti: 2 tespit"))
+        self.assertIn('"object_count": 2', values[6])
+        self.assertEqual(app.log_tree.insert.call_args.kwargs["tags"], ("warning",))
+        app.log_tree.yview_moveto.assert_called_once_with(1.0)
+        app.log_count_text.set.assert_called_once_with("1 kayıt")
 
 
 if __name__ == "__main__":
