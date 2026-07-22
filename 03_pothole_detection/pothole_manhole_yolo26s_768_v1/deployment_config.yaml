@@ -1,0 +1,8 @@
+task: detect
+architecture: YOLO26s
+imgsz: 768
+nc: 2
+names:
+  0: pothole
+  1: manhole_cover
+recommended_conf: 0.25

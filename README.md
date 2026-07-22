@@ -27,10 +27,10 @@ Uygulamadaki modeller [models.json](models.json) dosyasından yüklenir. Model a
   "models": [
     {
       "id": "pothole",
-      "display_name": "Çukur Tespiti",
-      "short_name": "Çukur",
+      "display_name": "Çukur ve Rögar Kapağı Tespiti",
+      "short_name": "Çukur / Rögar",
       "task": "detect",
-      "weights": "03_pothole_detection/model.pt",
+      "weights": "03_pothole_detection/pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt",
       "input_size": 768,
       "color_bgr": [60, 80, 245],
       "enabled": true
@@ -130,11 +130,11 @@ Testler kamera yaşam döngüsünü, Unicode fotoğraf yolunu, image source davr
 
 - `01_roadline_semantic`: tek sinifli yol cizgisi semantic segmentation modeli, 1024 giris.
 - `02_tabela_detection`: 16 sinifli tabela ve trafik isigi detection modeli, 640 giris.
-- `03_pothole_detection`: tek sinifli cukur detection modeli, 768 giris.
+- `03_pothole_detection`: iki sinifli (`pothole`, `manhole_cover`) aktif detection modeli ve korunmuş eski tek sınıflı çukur modeli, 768 giriş.
 - `04_road_marking_damage`: tek sinifli yol isareti hasari detection modeli, 640 giris.
 
-Her model klasöründe seçilen ağırlık `model.pt` adı ile, test metrikleri `metrics.json` adı ile ve Drive kaynak bilgisi kendi `README.md` dosyasında tutulur. Final test grafikleri `test_results/` altındadır.
+Çukur/rögar klasöründe eski tek sınıflı `model.pt` korunur. Aktif iki sınıflı model, kendi eğitim ve test artefaktlarıyla `pothole_manhole_yolo26s_768_v1/` altındadır. Diğer model klasörlerinde seçilen ağırlık `model.pt`, test metrikleri `metrics.json` ve final grafikler `test_results/` altında tutulur.
 
-`MODEL_INVENTORY.csv` dört modelin ortak envanteridir. Her model klasöründeki `SHA256SUMS.txt`, `model.pt` dosyasının yerel SHA-256 değerini verir.
+`MODEL_INVENTORY.csv` dört aktif modelin ortak envanteridir. Her model klasöründeki `SHA256SUMS.txt`, ilgili ağırlık dosyalarının yerel SHA-256 değerlerini verir.
 
 Tüm model ağırlıkları uygulamanın `YoloModelAdapter` sınıfı üzerinden gerçek bir sentetik kare ile yükleme ve inference bakımından doğrulanmıştır.

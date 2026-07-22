@@ -1,0 +1,65 @@
+{
+  "model_name": "pothole_manhole_yolo26s_768_v1",
+  "task": "object_detection",
+  "architecture": "YOLO26s",
+  "image_size": 768,
+  "ultralytics_version": "8.4.98",
+  "best_epoch": 196,
+  "classes": {
+    "0": "pothole",
+    "1": "manhole_cover"
+  },
+  "recommended_confidence": 0.25,
+  "validation": {
+    "all": {
+      "precision": 0.915,
+      "recall": 0.802,
+      "mAP50": 0.857,
+      "mAP50_95": 0.645
+    },
+    "pothole": {
+      "precision": 0.856,
+      "recall": 0.666,
+      "mAP50": 0.762,
+      "mAP50_95": 0.479
+    },
+    "manhole_cover": {
+      "precision": 0.975,
+      "recall": 0.938,
+      "mAP50": 0.952,
+      "mAP50_95": 0.811
+    }
+  },
+  "test": {
+    "all": {
+      "precision": 0.899455,
+      "recall": 0.846949,
+      "mAP50": 0.878024,
+      "mAP50_95": 0.661832
+    },
+    "pothole": {
+      "precision": 0.870308,
+      "recall": 0.745623,
+      "mAP50": 0.805651,
+      "mAP50_95": 0.528841
+    },
+    "manhole_cover": {
+      "precision": 0.928603,
+      "recall": 0.948276,
+      "mAP50": 0.950398,
+      "mAP50_95": 0.794823
+    }
+  },
+  "confusion_at_conf_025": {
+    "manhole_total": 58,
+    "manhole_correct": 55,
+    "manhole_as_pothole": 1,
+    "manhole_missed": 2,
+    "manhole_as_pothole_percent": 1.72,
+    "pothole_total": 153,
+    "pothole_correct": 114,
+    "pothole_as_manhole": 0,
+    "pothole_missed": 39
+  },
+  "known_error_note": "The single manhole-to-pothole error is a rectangular utility cover located in grass and is outside the primary road-camera deployment domain."
+}

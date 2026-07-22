@@ -1,1 +1,2 @@
 d595ec8e3b6de73874ed7a03b6ccc7b778a44fa47469f1c98d8724d98607fdb3  model.pt
+bea25d688d92a02e21035801dc3efe620e5ae150aa70c73ef9ff35605d5ac9d3  pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt
