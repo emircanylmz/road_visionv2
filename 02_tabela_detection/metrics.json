@@ -1,0 +1,26 @@
+{
+  "task": "object_detection",
+  "class_count": 16,
+  "input_size": 640,
+  "architecture": "YOLO26s-P2",
+  "classes": [
+    "20", "30", "dur", "durak", "girisyok", "ilerisag", "ilerisol", "kirmizi",
+    "park", "parkyasak", "sag", "sagadonulmez", "sari", "sol", "soladonulmez", "yesil"
+  ],
+  "validation": {
+    "images": 1594,
+    "instances": 2155,
+    "precision": 0.9723270758624535,
+    "recall": 0.9559358234892591,
+    "mAP50": 0.9729341695957241,
+    "mAP50-95": 0.7445974139506255
+  },
+  "test": {
+    "images": 1593,
+    "instances": 2097,
+    "precision": 0.9760384784243439,
+    "recall": 0.9457556845120096,
+    "mAP50": 0.9729974495338978,
+    "mAP50-95": 0.7368757588824827
+  }
+}

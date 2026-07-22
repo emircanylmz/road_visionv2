@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "roadline",
+      "display_name": "Yol Çizgisi Segmentasyonu",
+      "short_name": "Yol çizgisi",
+      "task": "semantic",
+      "weights": "01_roadline_semantic/model.pt",
+      "input_size": 1024,
+      "color_bgr": [50, 210, 90],
+      "enabled": true
+    },
+    {
+      "id": "traffic_sign",
+      "display_name": "Tabela ve Trafik Işığı",
+      "short_name": "Tabela",
+      "task": "detect",
+      "weights": "02_tabela_detection/model.pt",
+      "input_size": 640,
+      "color_bgr": [65, 165, 245],
+      "enabled": true
+    },
+    {
+      "id": "pothole",
+      "display_name": "Çukur Tespiti",
+      "short_name": "Çukur",
+      "task": "detect",
+      "weights": "03_pothole_detection/model.pt",
+      "input_size": 768,
+      "color_bgr": [60, 80, 245],
+      "enabled": true
+    },
+    {
+      "id": "marking_damage",
+      "display_name": "Yol İşareti Hasarı",
+      "short_name": "İşaret hasarı",
+      "task": "detect",
+      "weights": "04_road_marking_damage/model.pt",
+      "input_size": 640,
+      "color_bgr": [225, 90, 190],
+      "enabled": true
+    }
+  ]
+}

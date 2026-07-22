@@ -1,0 +1,23 @@
+{
+  "task": "object_detection",
+  "class_count": 1,
+  "classes": ["pothole"],
+  "input_size": 768,
+  "architecture": "YOLO26s",
+  "validation": {
+    "images": 133,
+    "instances": 330,
+    "precision": 0.8201185178604575,
+    "recall": 0.6757575757575758,
+    "mAP50": 0.7459370948945725,
+    "mAP50-95": 0.46928327151542826
+  },
+  "test": {
+    "images": 67,
+    "instances": 153,
+    "precision": 0.811570051794993,
+    "recall": 0.7189542483660131,
+    "mAP50": 0.7780710941917808,
+    "mAP50-95": 0.4837072991204601
+  }
+}

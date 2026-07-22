@@ -1,0 +1,7 @@
+path: /content/rmdd_1class_grouped
+train: train/images
+val: valid/images
+test: test/images
+nc: 1
+names:
+- road_marking_damage

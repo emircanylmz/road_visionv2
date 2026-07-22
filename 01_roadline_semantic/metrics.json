@@ -1,0 +1,18 @@
+{
+  "task": "semantic_segmentation",
+  "class_count": 1,
+  "input_size": 1024,
+  "architecture": "YOLO26s-sem",
+  "validation": {
+    "images": 109,
+    "foreground_pixels": 2622154,
+    "foreground_mIoU": 0.6447924971580505,
+    "pixel_accuracy": 0.990487813949585
+  },
+  "test": {
+    "images": 110,
+    "foreground_pixels": 1945345,
+    "foreground_mIoU": 0.6643939018249512,
+    "pixel_accuracy": 0.9939372539520264
+  }
+}

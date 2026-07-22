@@ -1,0 +1,24 @@
+{
+  "task": "object_detection",
+  "class_count": 1,
+  "classes": ["road_marking_damage"],
+  "input_size": 640,
+  "architecture": "YOLO26s",
+  "validation": {
+    "images": 150,
+    "instances": 590,
+    "precision": 0.83232,
+    "recall": 0.76558,
+    "mAP50": 0.76895,
+    "mAP50-95": 0.57284
+  },
+  "test": {
+    "images": 150,
+    "instances": 588,
+    "precision": 0.78073,
+    "recall": 0.77211,
+    "mAP50": 0.75561,
+    "mAP50-95": 0.53628
+  },
+  "model_sha256": "e747851bb6a4174a570c674521ee542056d23cde44f90f4644d023404ce5fbf5"
+}
