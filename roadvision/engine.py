@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from .config import PerformanceProfile
+from .logbook import EventJournal, LogLevel, NullJournal
 from .models.manager import AnalysisResult, ModelManager
 from .sources import MediaSource
 
@@ -66,8 +67,12 @@ class ProcessingEngine:
         self,
         event_callback: Callable[[EngineEvent], None],
         model_manager: ModelManager | None = None,
+        journal: EventJournal | None = None,
     ) -> None:
         self._event_callback = event_callback
+        # Günlük çağrıları kilit altında da yapılır; EventJournal üretici
+        # tarafı put_nowait ile asla bloklamaz, bu yüzden güvenlidir.
+        self._journal = journal or NullJournal()
         self._state = EngineState.IDLE
         self._state_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
@@ -285,6 +290,7 @@ class ProcessingEngine:
                     )
                 self._active_run = None
                 self._set_state(EngineState.IDLE)
+        self._journal.run_finished(context.run_id)
         context.finished_event.set()
 
         with self._lifecycle_lock:
@@ -397,6 +403,14 @@ class ProcessingEngine:
                         run_id=context.run_id,
                     ),
                 )
+                for stat in result.stats:
+                    self._journal.detection(
+                        run_id=context.run_id,
+                        model_id=stat.model_id,
+                        display_name=stat.display_name,
+                        object_count=stat.object_count,
+                        elapsed_ms=stat.elapsed_ms,
+                    )
             except Exception as exc:
                 self._fail_run(context, f"Model çalıştırma hatası: {exc}")
             finally:
@@ -478,8 +492,30 @@ class ProcessingEngine:
             # edemez; döndükten sonra eski run olayı yayımlanamaz.
             self._emit(event)
 
+    _JOURNAL_LEVELS = {
+        "error": LogLevel.ERROR,
+        "status": LogLevel.DEBUG,
+        "started": LogLevel.INFO,
+        "stopped": LogLevel.INFO,
+        "source_ended": LogLevel.INFO,
+        "shutdown_complete": LogLevel.INFO,
+    }
+
     def _emit(self, event: EngineEvent) -> None:
+        level = self._JOURNAL_LEVELS.get(event.kind)
+        if level is not None:
+            self._journal.app_event(
+                level,
+                event.message or event.kind,
+                run_id=event.run_id or None,
+                kind=event.kind,
+            )
         try:
             self._event_callback(event)
         except Exception:
-            pass
+            self._journal.app_event(
+                LogLevel.ERROR,
+                "Engine event callback hatası",
+                run_id=event.run_id or None,
+                kind=event.kind,
+            )

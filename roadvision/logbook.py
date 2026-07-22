@@ -1,0 +1,598 @@
+"""RoadVision olay ve tespit günlüğü.
+
+Tasarım, projedeki `Camera` ve `MediaSource` sınıflarıyla aynı yaşam
+döngüsünü izler: `prepare → use → release`. Üç katman vardır:
+
+- `LogRecord`: tek bir günlük kaydının yapılandırılmış, JSON'a çevrilebilir
+  modeli. Alanlar bilinçli olarak bir veritabanı satırına birebir eşlenecek
+  biçimde seçildi; ileride `DatabaseSink` eklemek şema değişikliği gerektirmez.
+- `LogSink`: kayıtların yazıldığı hedefin soyut sözleşmesi. `JsonlFileSink`
+  ve `ConsoleSink` bugünkü uygulamalardır; veritabanı, HTTP, MQTT gibi yeni
+  hedefler yalnız bu sınıfı uygulayarak eklenir.
+- `EventJournal`: uygulamanın kullandığı cephe (facade). Kayıtları sınırlı
+  bir kuyruğa bırakır; tek bir yazıcı thread kuyruğu boşaltıp tekrar
+  bastırmayı uygular ve sink'lere yazar. Böylece inference/capture
+  thread'leri hiçbir zaman disk I/O beklemez.
+
+Tespit tekrarları `DetectionSuppressor` ile bastırılır: aynı çalışmada aynı
+modelin imzası (varsayılan olarak nesne sayısı) değişmediği sürece yeni kayıt
+yazılmaz; seri bittiğinde kaç kare sürdüğü özetlenir, uzun sabit durumlar
+için isteğe bağlı kalp atışı kaydı düşülür.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import queue
+import sys
+import tempfile
+import threading
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Hashable
+
+
+class LogLevel(str, Enum):
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+_LEVEL_ORDER = {
+    LogLevel.DEBUG: 10,
+    LogLevel.INFO: 20,
+    LogLevel.WARNING: 30,
+    LogLevel.ERROR: 40,
+}
+
+
+class LogCategory(str, Enum):
+    APP = "app"
+    DETECTION = "detection"
+
+
+@dataclass(frozen=True, slots=True)
+class LogRecord:
+    """Tek günlük kaydı. Tüm alanlar JSON/veritabanı dostudur."""
+
+    timestamp: float
+    level: LogLevel
+    category: LogCategory
+    message: str
+    run_id: int | None = None
+    model_id: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def iso_time(self) -> str:
+        return datetime.fromtimestamp(self.timestamp, tz=timezone.utc).isoformat()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "time": self.iso_time,
+            "level": self.level.value,
+            "category": self.category.value,
+            "message": self.message,
+            "run_id": self.run_id,
+            "model_id": self.model_id,
+            "payload": self.payload,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, default=str)
+
+
+class LogSink(ABC):
+    """Günlük hedeflerinin sözleşmesi.
+
+    Yeni bir hedef (ör. veritabanı) eklemek için yalnız bu sınıf uygulanır ve
+    `EventJournal.add_sink` ile kaydedilir; günlük üreten kod değişmez.
+    Tüm sink çağrıları journal'ın TEK yazıcı thread'inden gelir; sink'lerin
+    kendi içinde kilit tutması gerekmez.
+    """
+
+    min_level: LogLevel = LogLevel.DEBUG
+
+    def accepts(self, record: LogRecord) -> bool:
+        return _LEVEL_ORDER[record.level] >= _LEVEL_ORDER[self.min_level]
+
+    @abstractmethod
+    def prepare_sink(self) -> None: ...
+
+    @abstractmethod
+    def write_record(self, record: LogRecord) -> None: ...
+
+    def flush(self) -> None:  # noqa: B027 - isteğe bağlı kanca
+        """Alt sınıflar tamponlarını boşaltmak için ezebilir."""
+
+    @abstractmethod
+    def release_sink(self) -> None: ...
+
+
+class JsonlFileSink(LogSink):
+    """Kayıtları satır başına bir JSON nesnesi olarak dosyaya yazar.
+
+    JSONL biçimi hem insan tarafından incelenebilir hem de ileride toplu
+    olarak veritabanına aktarılabilir. Basit boyut tabanlı döndürme vardır:
+    dosya `max_bytes` sınırını aşınca `.1` uzantısına taşınır (tek yedek).
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        min_level: LogLevel = LogLevel.DEBUG,
+        max_bytes: int = 5 * 1024 * 1024,
+    ) -> None:
+        self.path = Path(path)
+        self.min_level = min_level
+        self.max_bytes = max_bytes
+        self._stream: io.TextIOWrapper | None = None
+
+    def prepare_sink(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = self.path.open("a", encoding="utf-8")
+
+    def write_record(self, record: LogRecord) -> None:
+        if self._stream is None:
+            return
+        self._stream.write(record.to_json() + "\n")
+        if self.max_bytes > 0 and self._stream.tell() >= self.max_bytes:
+            self._rotate()
+
+    def flush(self) -> None:
+        if self._stream is not None:
+            self._stream.flush()
+
+    def _rotate(self) -> None:
+        assert self._stream is not None
+        self._stream.close()
+        backup = self.path.with_suffix(self.path.suffix + ".1")
+        try:
+            backup.unlink(missing_ok=True)
+            self.path.rename(backup)
+        except OSError:
+            # Döndürme başarısızsa mevcut dosyaya yazmaya devam etmek,
+            # günlüğü tamamen kaybetmekten iyidir.
+            pass
+        self._stream = self.path.open("a", encoding="utf-8")
+
+    def release_sink(self) -> None:
+        if self._stream is not None:
+            self._stream.flush()
+            self._stream.close()
+            self._stream = None
+
+
+class ConsoleSink(LogSink):
+    """Uyarı ve hataları stderr'e basar; geliştirme sırasında görünürlük sağlar."""
+
+    def __init__(self, min_level: LogLevel = LogLevel.WARNING) -> None:
+        self.min_level = min_level
+
+    def prepare_sink(self) -> None:  # durum yok
+        return
+
+    def write_record(self, record: LogRecord) -> None:
+        prefix = f"[{record.level.value.upper()}] {record.iso_time}"
+        run = f" run={record.run_id}" if record.run_id is not None else ""
+        model = f" model={record.model_id}" if record.model_id else ""
+        print(f"{prefix}{run}{model} {record.message}", file=sys.stderr)
+
+    def release_sink(self) -> None:
+        return
+
+
+class SessionLogSink(LogSink):
+    """UI'ın bu oturumdaki kayıtları güvenle tüketmesi için kuyruk sink'i.
+
+    Kayıtlar journal'ın yazıcı thread'inden gelir, UI ise Tk ana thread'inde
+    ``drain`` ile kuyruğu boşaltır. Kuyruk dolarsa en eski kayıt atılır; disk
+    günlüğü bundan etkilenmez ve arayüz hiçbir üretici thread'i bloklamaz.
+    """
+
+    def __init__(
+        self,
+        max_records: int = 2000,
+        min_level: LogLevel = LogLevel.DEBUG,
+    ) -> None:
+        if max_records <= 0:
+            raise ValueError("max_records pozitif olmalıdır.")
+        self.min_level = min_level
+        self._records: queue.Queue[LogRecord] = queue.Queue(maxsize=max_records)
+
+    def prepare_sink(self) -> None:
+        return
+
+    def write_record(self, record: LogRecord) -> None:
+        while True:
+            try:
+                self._records.put_nowait(record)
+                return
+            except queue.Full:
+                try:
+                    self._records.get_nowait()
+                except queue.Empty:
+                    continue
+
+    def drain(self, limit: int | None = None) -> list[LogRecord]:
+        """Bekleyen kayıtları eskiden yeniye döndürür."""
+        records: list[LogRecord] = []
+        while limit is None or len(records) < limit:
+            try:
+                records.append(self._records.get_nowait())
+            except queue.Empty:
+                break
+        return records
+
+    def release_sink(self) -> None:
+        return
+
+
+# ---------------------------------------------------------------------------
+# Tespit tekrarlarının bastırılması
+
+
+@dataclass(slots=True)
+class _Streak:
+    signature: Hashable
+    started_at: float
+    last_logged_at: float
+    frames: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressionDecision:
+    should_log: bool
+    reason: str  # "changed" | "heartbeat" | "suppressed"
+    repeated_frames: int
+    previous_signature: Hashable | None = None
+    previous_frames: int = 0
+    previous_seconds: float = 0.0
+
+
+class DetectionSuppressor:
+    """Art arda gelen özdeş tespitleri bastırır.
+
+    Anahtar `(run_id, model_id)`, imza varsayılan olarak nesne sayısıdır;
+    çağıran daha zengin bir imza (ör. sınıf-başına sayım demeti) verebilir.
+    Yalnız journal'ın yazıcı thread'inden çağrılır; bu yüzden kilitsizdir.
+
+    Kurallar:
+    - İmza değiştiğinde kayıt yazılır; biten serinin kaç kare ve kaç saniye
+      sürdüğü karara eklenir.
+    - İmza aynı kaldığı sürece kayıt yazılmaz; `heartbeat_seconds` doluysa
+      seri sürüyor bilgisiyle bir kalp atışı kaydına izin verilir (0 veya
+      negatif değer kalp atışını kapatır).
+    """
+
+    def __init__(self, heartbeat_seconds: float = 30.0) -> None:
+        self.heartbeat_seconds = heartbeat_seconds
+        self._streaks: dict[tuple[int, str], _Streak] = {}
+
+    def observe(
+        self,
+        run_id: int,
+        model_id: str,
+        signature: Hashable,
+        now: float | None = None,
+    ) -> SuppressionDecision:
+        now = time.time() if now is None else now
+        key = (run_id, model_id)
+        streak = self._streaks.get(key)
+
+        if streak is None or streak.signature != signature:
+            decision = SuppressionDecision(
+                should_log=True,
+                reason="changed",
+                repeated_frames=1,
+                previous_signature=streak.signature if streak else None,
+                previous_frames=streak.frames if streak else 0,
+                previous_seconds=(now - streak.started_at) if streak else 0.0,
+            )
+            self._streaks[key] = _Streak(signature, now, now)
+            return decision
+
+        streak.frames += 1
+        if self.heartbeat_seconds > 0 and (now - streak.last_logged_at) >= self.heartbeat_seconds:
+            streak.last_logged_at = now
+            return SuppressionDecision(
+                should_log=True, reason="heartbeat", repeated_frames=streak.frames
+            )
+        return SuppressionDecision(
+            should_log=False, reason="suppressed", repeated_frames=streak.frames
+        )
+
+    def finish_run(self, run_id: int, now: float | None = None) -> list[LogRecord]:
+        """Çalışma bitince açık serileri özet kayıtlarına çevirir ve unutur."""
+        now = time.time() if now is None else now
+        records: list[LogRecord] = []
+        for key in [key for key in self._streaks if key[0] == run_id]:
+            streak = self._streaks.pop(key)
+            records.append(
+                LogRecord(
+                    timestamp=now,
+                    level=LogLevel.INFO,
+                    category=LogCategory.DETECTION,
+                    message="Tespit serisi çalışma sonunda kapandı.",
+                    run_id=key[0],
+                    model_id=key[1],
+                    payload={
+                        "signature": streak.signature,
+                        "frames": streak.frames,
+                        "seconds": round(now - streak.started_at, 3),
+                        "closed_by": "run_finished",
+                    },
+                )
+            )
+        return records
+
+
+# ---------------------------------------------------------------------------
+# Cephe
+
+
+class EventJournal:
+    """Uygulamanın günlük cephesi.
+
+    Üretici taraf (`app_event`, `detection`, `run_finished`) yalnız sınırlı
+    bir kuyruğa `put_nowait` yapar ve asla bloklamaz; kuyruk doluysa kayıt
+    düşürülür ve düşen sayısı bir sonraki uygun kayda iliştirilir. Tek yazıcı
+    thread bastırma kararını verir ve tüm sink'lere yazar.
+    """
+
+    def __init__(
+        self,
+        sinks: list[LogSink] | None = None,
+        suppressor: DetectionSuppressor | None = None,
+        queue_size: int = 1000,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._sinks: list[LogSink] = list(sinks or [])
+        self._suppressor = suppressor or DetectionSuppressor()
+        self._clock = clock
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=queue_size)
+        self._worker: threading.Thread | None = None
+        self._closed = threading.Event()
+        self._dropped = 0
+        self._dropped_lock = threading.Lock()
+
+    # -- yaşam döngüsü ------------------------------------------------------
+
+    def prepare_journal(self) -> None:
+        for sink in self._sinks:
+            sink.prepare_sink()
+        self._closed.clear()
+        self._worker = threading.Thread(
+            target=self._worker_loop, name="roadvision-journal", daemon=True
+        )
+        self._worker.start()
+        self.app_event(LogLevel.INFO, "Günlük başlatıldı.")
+
+    def add_sink(self, sink: LogSink) -> None:
+        """Yeni hedef ekler (ör. ileride DatabaseSink).
+
+        Yazıcı thread'i ile yarışmamak için sink hazırlanıp kuyruk üzerinden
+        eklenir; ekleme sırası korunur.
+        """
+        sink.prepare_sink()
+        self._enqueue(("add_sink", sink))
+
+    def release_journal(self, timeout: float = 5.0) -> None:
+        if self._worker is None:
+            return
+        self.app_event(LogLevel.INFO, "Günlük kapatılıyor.")
+        self._enqueue(("close", None))
+        self._worker.join(timeout=timeout)
+        self._worker = None
+        for sink in self._sinks:
+            try:
+                sink.flush()
+                sink.release_sink()
+            except Exception:
+                pass
+
+    # -- üretici API ---------------------------------------------------------
+
+    def app_event(
+        self,
+        level: LogLevel,
+        message: str,
+        run_id: int | None = None,
+        **payload: Any,
+    ) -> None:
+        self._enqueue(
+            LogRecord(
+                timestamp=self._clock(),
+                level=level,
+                category=LogCategory.APP,
+                message=message,
+                run_id=run_id,
+                payload=payload,
+            )
+        )
+
+    def detection(
+        self,
+        run_id: int,
+        model_id: str,
+        display_name: str,
+        object_count: int,
+        elapsed_ms: float,
+        signature: Hashable | None = None,
+        **payload: Any,
+    ) -> None:
+        """Tek modelin tek karedeki tespit özetini bildirir.
+
+        `signature` verilmezse nesne sayısı imzadır; sınıf-başına sayımlar
+        gibi daha ayrıntılı bir imza verilirse bastırma o düzeyde çalışır.
+        """
+        self._enqueue(
+            (
+                "detection",
+                LogRecord(
+                    timestamp=self._clock(),
+                    level=LogLevel.INFO,
+                    category=LogCategory.DETECTION,
+                    message=f"{display_name}: {object_count} tespit",
+                    run_id=run_id,
+                    model_id=model_id,
+                    payload={
+                        "object_count": object_count,
+                        "elapsed_ms": round(elapsed_ms, 1),
+                        "signature": object_count if signature is None else signature,
+                        **payload,
+                    },
+                ),
+            )
+        )
+
+    def run_finished(self, run_id: int) -> None:
+        self._enqueue(("run_finished", run_id))
+
+    @property
+    def dropped_records(self) -> int:
+        with self._dropped_lock:
+            return self._dropped
+
+    # -- iç işleyiş ----------------------------------------------------------
+
+    def _enqueue(self, item: object) -> None:
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            with self._dropped_lock:
+                self._dropped += 1
+
+    def _take_dropped(self) -> int:
+        with self._dropped_lock:
+            dropped, self._dropped = self._dropped, 0
+            return dropped
+
+    def _worker_loop(self) -> None:
+        while not self._closed.is_set():
+            try:
+                item = self._queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                self._process(item)
+            except Exception:
+                # Günlük hattındaki bir hata uygulamayı asla düşürmemeli.
+                pass
+            finally:
+                self._queue.task_done()
+
+    def _process(self, item: object) -> None:
+        if isinstance(item, LogRecord):
+            self._write(item)
+            return
+        kind, value = item  # type: ignore[misc]
+        if kind == "detection":
+            self._process_detection(value)
+        elif kind == "run_finished":
+            for record in self._suppressor.finish_run(int(value), now=self._clock()):
+                self._write(record)
+        elif kind == "add_sink":
+            self._sinks.append(value)
+        elif kind == "close":
+            self._closed.set()
+
+    def _process_detection(self, record: LogRecord) -> None:
+        decision = self._suppressor.observe(
+            run_id=record.run_id if record.run_id is not None else -1,
+            model_id=record.model_id or "?",
+            signature=record.payload.get("signature"),
+            now=record.timestamp,
+        )
+        if not decision.should_log:
+            return
+        payload = dict(record.payload)
+        payload["dedup"] = decision.reason
+        payload["repeated_frames"] = decision.repeated_frames
+        if decision.reason == "changed" and decision.previous_signature is not None:
+            payload["previous"] = {
+                "signature": decision.previous_signature,
+                "frames": decision.previous_frames,
+                "seconds": round(decision.previous_seconds, 3),
+            }
+        self._write(
+            LogRecord(
+                timestamp=record.timestamp,
+                level=record.level,
+                category=record.category,
+                message=record.message,
+                run_id=record.run_id,
+                model_id=record.model_id,
+                payload=payload,
+            )
+        )
+
+    def _write(self, record: LogRecord) -> None:
+        dropped = self._take_dropped()
+        if dropped:
+            record = LogRecord(
+                timestamp=record.timestamp,
+                level=record.level,
+                category=record.category,
+                message=record.message,
+                run_id=record.run_id,
+                model_id=record.model_id,
+                payload={**record.payload, "dropped_before_this": dropped},
+            )
+        for sink in self._sinks:
+            if sink.accepts(record):
+                try:
+                    sink.write_record(record)
+                except Exception:
+                    # Tek sink'in hatası diğer hedeflere yazmayı engellememeli.
+                    pass
+
+
+class NullJournal(EventJournal):
+    """Günlük istenmediğinde kullanılan etkisiz uygulama (test/başsız kullanım)."""
+
+    def __init__(self) -> None:
+        super().__init__(sinks=[], queue_size=1)
+
+    def prepare_journal(self) -> None:
+        return
+
+    def release_journal(self, timeout: float = 5.0) -> None:
+        return
+
+    def _enqueue(self, item: object) -> None:
+        return
+
+
+def create_default_journal(log_dir: str | Path | None = None) -> EventJournal:
+    """Uygulamanın varsayılan günlüğünü kurar.
+
+    JSONL dosya sink'i için sırasıyla verilen dizin, kullanıcı cache dizini ve
+    geçici dizin denenir; hiçbiri yazılamazsa yalnız konsol sink'i ile devam
+    edilir. Uygulama, günlük kurulamadı diye asla açılmamazlık etmez.
+    """
+    candidates: list[Path] = []
+    if log_dir is not None:
+        candidates.append(Path(log_dir))
+    candidates.append(Path.home() / ".cache" / "roadvision" / "logs")
+    candidates.append(Path(tempfile.gettempdir()) / "roadvision-logs")
+
+    sinks: list[LogSink] = []
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-test"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        except OSError:
+            continue
+        sinks.append(JsonlFileSink(candidate / "roadvision.jsonl"))
+        break
+    sinks.append(ConsoleSink(min_level=LogLevel.WARNING))
+    return EventJournal(sinks=sinks)
