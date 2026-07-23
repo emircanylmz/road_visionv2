@@ -61,6 +61,14 @@ class SourceResetTests(unittest.TestCase):
         app._active_run_id = app.engine.active_run_id  # type: ignore[attr-defined]
         app._closing = False
         app._closed = False
+        app._snapshot_fetcher = None  # type: ignore[attr-defined]
+        app._snapshot_viewer = None  # type: ignore[attr-defined]
+        app._snapshot_generation = 0  # type: ignore[attr-defined]
+        app._snapshot_capture_id = None  # type: ignore[attr-defined]
+        app._snapshot_capture_time = None  # type: ignore[attr-defined]
+        app._snapshot_retry_attempted = False  # type: ignore[attr-defined]
+        app._log_capture_ids = {}  # type: ignore[attr-defined]
+        app._log_capture_times = {}  # type: ignore[attr-defined]
         app._events = queue.Queue()
         app._events.put(EngineEvent(kind="frame", run_id=run_id or 0))
         app._events.put(EngineEvent(kind="stopped", run_id=run_id or 0))
@@ -231,11 +239,102 @@ class SourceResetTests(unittest.TestCase):
 
         app.log_tree.insert.assert_called_once()
         values = app.log_tree.insert.call_args.kwargs["values"]
-        self.assertEqual(values[1:6], ("WARNING", "detection", 4, "pothole", "Çukur Tespiti: 2 tespit"))
-        self.assertIn('"object_count": 2', values[6])
+        self.assertEqual(values[2:7], ("WARNING", "detection", 4, "pothole", "Çukur Tespiti: 2 tespit"))
+        self.assertIn('"object_count": 2', values[7])
+        self.assertEqual(values[1], "")
         self.assertEqual(app.log_tree.insert.call_args.kwargs["tags"], ("warning",))
         app.log_tree.yview_moveto.assert_called_once_with(1.0)
         app.log_count_text.set.assert_called_once_with("1 kayıt")
+
+    def test_capture_mapping_is_added_pruned_and_cleared_with_tree_rows(self) -> None:
+        app = self.make_app(EngineState.IDLE, run_id=None)
+        app._snapshot_fetcher = Mock()  # type: ignore[attr-defined]
+        app._session_log_sink = SessionLogSink()  # type: ignore[attr-defined]
+        app._session_log_count = 1000  # type: ignore[attr-defined]
+        app._log_capture_ids = {"old": "old-capture"}  # type: ignore[attr-defined]
+        app._log_capture_times = {"old": 1.0}  # type: ignore[attr-defined]
+        app.log_tree = Mock()  # type: ignore[attr-defined]
+        app.log_tree.insert.return_value = "new"
+        app.log_tree.get_children.return_value = ("old", "new")
+        app.log_count_text = Mock()  # type: ignore[attr-defined]
+        capture_id = "035de335-28d6-4c31-9d7d-54fc6ca076ff"
+        record = LogRecord(
+            timestamp=100.0,
+            level=LogLevel.INFO,
+            category=LogCategory.DETECTION,
+            message="Çukur Tespiti: 1 tespit",
+            run_id=4,
+            model_id="pothole",
+            payload={"object_count": 1, "capture_id": capture_id},
+        )
+
+        app._append_log_record(record)
+
+        values = app.log_tree.insert.call_args.kwargs["values"]
+        self.assertEqual(values[1], "📷")
+        self.assertEqual(app._log_capture_ids, {"new": capture_id})
+        self.assertEqual(app._log_capture_times, {"new": 100.0})
+        app.log_tree.delete.assert_called_once_with("old")
+        self.assertEqual(app._session_log_count, 1000)
+
+        app._clear_session_logs()
+
+        self.assertEqual(app._log_capture_ids, {})
+        self.assertEqual(app._log_capture_times, {})
+        self.assertEqual(app._session_log_count, 0)
+
+    def test_capture_icon_stays_blank_when_dsn_feature_is_disabled(self) -> None:
+        app = self.make_app(EngineState.IDLE, run_id=None)
+        app._session_log_count = 0  # type: ignore[attr-defined]
+        app.log_tree = Mock()  # type: ignore[attr-defined]
+        app.log_tree.insert.return_value = "row"
+        app.log_tree.get_children.return_value = ()
+        app.log_count_text = Mock()  # type: ignore[attr-defined]
+
+        app._append_log_record(
+            LogRecord(
+                timestamp=100.0,
+                level=LogLevel.INFO,
+                category=LogCategory.DETECTION,
+                message="Tespit",
+                payload={"capture_id": "035de335-28d6-4c31-9d7d-54fc6ca076ff"},
+            )
+        )
+
+        self.assertEqual(app.log_tree.insert.call_args.kwargs["values"][1], "")
+        self.assertEqual(app._log_capture_ids, {})
+
+    def test_open_without_dsn_or_without_capture_only_updates_status(self) -> None:
+        app = self.make_app(EngineState.IDLE, run_id=None)
+        app.log_tree = Mock()  # type: ignore[attr-defined]
+
+        app._open_selected_snapshot()
+
+        app.status_text.set.assert_called_with(
+            "Tespit görüntüleyici kapalı: ROADVISION_DB_DSN tanımlı değil."
+        )
+
+        app.status_text.reset_mock()
+        app._snapshot_fetcher = Mock()  # type: ignore[attr-defined]
+        app.log_tree.selection.return_value = ("plain-row",)
+        app._open_selected_snapshot()
+
+        app.status_text.set.assert_called_with(
+            "Seçili günlük satırında tespit görüntüsü yok."
+        )
+
+    def test_stale_snapshot_generation_is_ignored(self) -> None:
+        app = self.make_app(EngineState.IDLE, run_id=None)
+        app._snapshot_generation = 2  # type: ignore[attr-defined]
+        app._snapshot_viewer = Mock()  # type: ignore[attr-defined]
+        app._snapshot_viewer.exists.return_value = True  # type: ignore[attr-defined]
+        stale = Mock(generation=1, status="error", message="eski hata")
+        app._snapshot_fetcher = Mock()  # type: ignore[attr-defined]
+        app._snapshot_fetcher.drain.return_value = [stale]  # type: ignore[attr-defined]
+
+        app._poll_snapshot_results()
+
+        app._snapshot_viewer.show_error.assert_not_called()  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":
