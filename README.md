@@ -154,7 +154,7 @@ için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) dosyasına bakın.
 ## Sürüm geçmişi ve geri dönüş
 
 Kararlı sürümler Git etiketleriyle, devam eden çalışma ise ayrı dallarla
-korunur. v1.1.0 geliştirmesi `codex/release-v1.1.0` dalındadır; mevcut
+korunur. v1.1.0 geliştirmesi `release/v1.1.0` dalındadır; mevcut
 `release/v1.0.1`, `v1.0.1` ve `v1.0.0` geçmişi değiştirilmez.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:
@@ -170,7 +170,7 @@ Eski sürüm üzerinde yeni değişiklik yapmak isterseniz etiketten ayrı bir d
 git switch -c inceleme/v1.0.1 v1.0.1
 ```
 
-Güncel sürüm dalına dönmek için `git switch codex/release-v1.1.0` kullanılabilir.
+Güncel sürüm dalına dönmek için `git switch release/v1.1.0` kullanılabilir.
 
 ## Model klasörleri
 
