@@ -3,3 +3,6 @@ opencv-python>=4.8
 Pillow>=10
 torch>=2.2
 ultralytics>=8.4
+
+# PostgreSQL kaydı için isteğe bağlı (bkz. DATABASE.md):
+# psycopg[binary]>=3.1,<4

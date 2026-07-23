@@ -24,17 +24,20 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import queue
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Hashable
+from typing import Any, Callable, Hashable, Sequence
 
 
 class LogLevel(str, Enum):
@@ -50,6 +53,20 @@ _LEVEL_ORDER = {
     LogLevel.WARNING: 30,
     LogLevel.ERROR: 40,
 }
+
+
+def _new_ingest_key() -> str:
+    return f"live:{uuid.uuid4().hex}"
+
+
+def detection_signature(objects: Sequence[Any], object_count: int) -> Hashable:
+    """Journal tekrar bastırmasının tek ortak imza tanımı."""
+
+    if objects:
+        return tuple(
+            sorted(Counter(getattr(item, "class_name", "?") for item in objects).items())
+        )
+    return int(object_count)
 
 
 class LogCategory(str, Enum):
@@ -68,6 +85,7 @@ class LogRecord:
     run_id: int | None = None
     model_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
+    ingest_key: str | None = field(default_factory=_new_ingest_key)
 
     @property
     def iso_time(self) -> str:
@@ -82,6 +100,7 @@ class LogRecord:
             "run_id": self.run_id,
             "model_id": self.model_id,
             "payload": self.payload,
+            "ingest_key": self.ingest_key,
         }
 
     def to_json(self) -> str:
@@ -249,7 +268,7 @@ class _Streak:
 @dataclass(frozen=True, slots=True)
 class SuppressionDecision:
     should_log: bool
-    reason: str  # "changed" | "heartbeat" | "suppressed"
+    reason: str  # "changed" | "capture" | "heartbeat" | "suppressed"
     repeated_frames: int
     previous_signature: Hashable | None = None
     previous_frames: int = 0
@@ -281,6 +300,7 @@ class DetectionSuppressor:
         model_id: str,
         signature: Hashable,
         now: float | None = None,
+        force_log: bool = False,
     ) -> SuppressionDecision:
         now = time.time() if now is None else now
         key = (run_id, model_id)
@@ -299,6 +319,16 @@ class DetectionSuppressor:
             return decision
 
         streak.frames += 1
+        if force_log:
+            # Medya kapısı journal'dan daha zengin (mekânsal) imza kullanır.
+            # Aynı sınıf kompozisyonunda yeni bir kare yakalandıysa olay↔medya
+            # korelasyon satırının bastırılmasına izin verme.
+            streak.last_logged_at = now
+            return SuppressionDecision(
+                should_log=True,
+                reason="capture",
+                repeated_frames=streak.frames,
+            )
         if self.heartbeat_seconds > 0 and (now - streak.last_logged_at) >= self.heartbeat_seconds:
             streak.last_logged_at = now
             return SuppressionDecision(
@@ -425,13 +455,30 @@ class EventJournal:
         object_count: int,
         elapsed_ms: float,
         signature: Hashable | None = None,
+        objects: Sequence[Any] = (),
         **payload: Any,
     ) -> None:
         """Tek modelin tek karedeki tespit özetini bildirir.
 
-        `signature` verilmezse nesne sayısı imzadır; sınıf-başına sayımlar
-        gibi daha ayrıntılı bir imza verilirse bastırma o düzeyde çalışır.
+        `objects` (DetectedObject dizisi) verilirse imza sınıf-başına sayım
+        demetidir: aynı toplam sayıda kalsa bile tür bileşimi değiştiğinde
+        (ör. 2 çukur → 1 çukur + 1 rögar) yeni kayıt yazılır. Tekil nesneler
+        tür, doğruluk ve konumlarıyla payload'a eklenir; veritabanı sink'i
+        `detected_objects` tablosunu bu alandan doldurur. `signature`
+        parametresi verilirse her ikisine de üstün gelir.
         """
+        if signature is None:
+            signature = detection_signature(objects, object_count)
+        record_payload: dict[str, Any] = {
+            "object_count": object_count,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "signature": signature,
+            **payload,
+        }
+        if objects:
+            record_payload["objects"] = [
+                o.to_payload() if hasattr(o, "to_payload") else dict(o) for o in objects
+            ]
         self._enqueue(
             (
                 "detection",
@@ -442,12 +489,7 @@ class EventJournal:
                     message=f"{display_name}: {object_count} tespit",
                     run_id=run_id,
                     model_id=model_id,
-                    payload={
-                        "object_count": object_count,
-                        "elapsed_ms": round(elapsed_ms, 1),
-                        "signature": object_count if signature is None else signature,
-                        **payload,
-                    },
+                    payload=record_payload,
                 ),
             )
         )
@@ -509,6 +551,7 @@ class EventJournal:
             model_id=record.model_id or "?",
             signature=record.payload.get("signature"),
             now=record.timestamp,
+            force_log=bool(record.payload.get("capture_id")),
         )
         if not decision.should_log:
             return
@@ -530,6 +573,7 @@ class EventJournal:
                 run_id=record.run_id,
                 model_id=record.model_id,
                 payload=payload,
+                ingest_key=record.ingest_key,
             )
         )
 
@@ -544,6 +588,7 @@ class EventJournal:
                 run_id=record.run_id,
                 model_id=record.model_id,
                 payload={**record.payload, "dropped_before_this": dropped},
+                ingest_key=record.ingest_key,
             )
         for sink in self._sinks:
             if sink.accepts(record):
@@ -595,4 +640,16 @@ def create_default_journal(log_dir: str | Path | None = None) -> EventJournal:
         sinks.append(JsonlFileSink(candidate / "roadvision.jsonl"))
         break
     sinks.append(ConsoleSink(min_level=LogLevel.WARNING))
+
+    dsn = os.environ.get("ROADVISION_DB_DSN")
+    if dsn:
+        # Döngüsel import yok: db yalnız logbook'a bağımlıdır. psycopg kurulu
+        # değilse ya da bağlantı kurulamazsa asenkron sink uyarı verir ve
+        # yeniden dener; JSONL dayanıklı kayıttır ve sonradan aktarılabilir.
+        try:
+            from .db import PostgresSink
+
+            sinks.append(PostgresSink(dsn))
+        except Exception as exc:
+            print(f"[WARNING] PostgreSQL sink kurulamadı, DB'siz devam: {exc}", file=sys.stderr)
     return EventJournal(sinks=sinks)

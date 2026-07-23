@@ -8,6 +8,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from .base import ModelAdapter, ModelRunStat
+from .detections import extract_objects
 
 
 class YoloModelAdapter(ModelAdapter):
@@ -127,7 +128,13 @@ class YoloModelAdapter(ModelAdapter):
         result = self.predict(frame)
         canvas, count = self.annotate(canvas, result)
         elapsed_ms = (time.perf_counter() - started) * 1000
-        return canvas, ModelRunStat(self.spec.id, self.spec.display_name, count, elapsed_ms)
+        return canvas, ModelRunStat(
+            self.spec.id,
+            self.spec.display_name,
+            count,
+            elapsed_ms,
+            objects=extract_objects(result, self.spec.id),
+        )
 
     def release_model(self) -> None:
         self._model = None

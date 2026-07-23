@@ -219,3 +219,6 @@ __marimo__/
 
 # macOS
 .DS_Store
+
+# RoadVision medya dışa aktarımları
+exports/

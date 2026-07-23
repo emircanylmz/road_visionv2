@@ -12,12 +12,12 @@ ProcessingEngine / RoadVisionApp
              │
              ▼  tek yazıcı thread
      DetectionSuppressor
-       ┌─────┼──────────────┐
-       ▼     ▼              ▼
-   JSONL   stderr     SessionLogSink
-                            │
-                            ▼  33 ms UI polling
-                    Oturum Günlüğü tablosu
+       ┌─────┼──────────┬──────────────┐
+       ▼     ▼          ▼              ▼
+   JSONL   stderr  PostgresSink  SessionLogSink
+                                        │
+                                        ▼  33 ms UI polling
+                                Oturum Günlüğü tablosu
 ```
 
 `app_event`, `detection` ve `run_finished` çağrıları yalnız sınırlı journal kuyruğuna kayıt bırakır. JSON serileştirme, tekrar bastırma ve sink yazımları tek journal worker'ında gerçekleşir. Bu nedenle model çıkarımı günlük dosyasının yazılmasını beklemez.
@@ -35,11 +35,12 @@ Her satır bir `LogRecord` nesnesinin JSON karşılığıdır:
 | `run_id` | İlgili çalışma kimliği; uygulama-geneli kayıtlarda `null` |
 | `model_id` | İlgili model kimliği; uygulama olaylarında `null` |
 | `payload` | Olay türüne özel yapılandırılmış ayrıntılar |
+| `ingest_key` | JSONL/PostgreSQL retry ve backfill işlemlerinde kullanılan tekil kayıt kimliği |
 
 Örnek tespit kaydı:
 
 ```json
-{"time":"2026-07-22T12:11:55.011571+00:00","level":"info","category":"detection","message":"Tabela ve Trafik Işığı: 1 tespit","run_id":1,"model_id":"traffic_sign","payload":{"object_count":1,"elapsed_ms":690.0,"signature":1,"dedup":"changed","repeated_frames":1}}
+{"time":"2026-07-22T12:11:55.011571+00:00","level":"info","category":"detection","message":"Tabela ve Trafik Işığı: 1 tespit","run_id":1,"model_id":"traffic_sign","payload":{"object_count":1,"elapsed_ms":690.0,"signature":1,"dedup":"changed","repeated_frames":1},"ingest_key":"live:93f91b6c30e24fc1a85550c0df18b728"}
 ```
 
 ## Kalıcı dosyalar
@@ -69,9 +70,13 @@ Tablo saat, seviye, kategori, run, model, mesaj ve payload ayrıntılarını gö
 
 ## Tespit tekrarlarının bastırılması
 
-Her model ve çalışma için varsayılan imza `object_count` değeridir. Art arda aynı imza geldiğinde her kare için yeni satır yazılmaz:
+Her model ve çalışma için varsayılan imza, tekil nesneler varsa sınıf-başına
+sayım demeti; nesne çıkarımı yoksa `object_count` değeridir. Art arda aynı
+imza geldiğinde her kare için yeni satır yazılmaz:
 
 - İlk imza veya imza değişimi `dedup=changed` kaydı üretir.
+- Sınıf imzası aynı olsa da medya kapısı yeni bir mekânsal kare yakalarsa,
+  olay↔görüntü ilişkisini korumak için `dedup=capture` kaydı üretilir.
 - Sabit durum 30 saniyeyi aşarsa `dedup=heartbeat` kaydı üretilebilir.
 - İmza değiştiğinde önceki serinin kare sayısı ve süresi `previous` alanına eklenir.
 - Çalışma bittiğinde açık seri `closed_by=run_finished` özetiyle kapatılır.

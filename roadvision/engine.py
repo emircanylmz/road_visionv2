@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -11,7 +12,16 @@ from typing import Any
 import numpy as np
 
 from .config import PerformanceProfile
-from .logbook import EventJournal, LogLevel, NullJournal
+from .logbook import EventJournal, LogLevel, NullJournal, detection_signature
+from .media import (
+    CaptureModel,
+    GateObservation,
+    MediaRecorder,
+    NullRecorder,
+    Snapshot,
+    SnapshotGate,
+    snapshot_signature,
+)
 from .models.manager import AnalysisResult, ModelManager
 from .sources import MediaSource
 
@@ -41,6 +51,8 @@ class FramePacket:
     frame: np.ndarray
     sequence: int
     captured_at: float = field(default_factory=time.perf_counter)
+    captured_timestamp: float = field(default_factory=time.time)
+    is_reprocess: bool = False
 
 
 @dataclass(slots=True)
@@ -51,7 +63,7 @@ class _RunContext:
     stop_event: threading.Event = field(default_factory=threading.Event)
     frame_queue: queue.Queue[FramePacket] = field(default_factory=lambda: queue.Queue(maxsize=1))
     finished_event: threading.Event = field(default_factory=threading.Event)
-    last_frame: np.ndarray | None = None
+    last_packet: FramePacket | None = None
     capture_thread: threading.Thread | None = None
     inference_thread: threading.Thread | None = None
     reaper_thread: threading.Thread | None = None
@@ -68,6 +80,8 @@ class ProcessingEngine:
         event_callback: Callable[[EngineEvent], None],
         model_manager: ModelManager | None = None,
         journal: EventJournal | None = None,
+        recorder: MediaRecorder | NullRecorder | None = None,
+        gate: SnapshotGate | None = None,
     ) -> None:
         self._event_callback = event_callback
         # Günlük çağrıları kilit altında da yapılır; EventJournal üretici
@@ -85,6 +99,18 @@ class ProcessingEngine:
         self._shutdown_complete = threading.Event()
         self._shutdown_thread: threading.Thread | None = None
         self._manager = model_manager or ModelManager(status_callback=self._emit_status)
+        self._recorder: MediaRecorder | NullRecorder = recorder or NullRecorder()
+        self._gate = gate or self._recorder.gate
+        try:
+            self._recorder.prepare_recorder()
+        except Exception as exc:
+            self._journal.app_event(
+                LogLevel.WARNING,
+                "Medya recorder başlatılamadı; görüntü kaydı kapatıldı.",
+                media_error=str(exc),
+            )
+            self._recorder = NullRecorder()
+            self._gate = gate or self._recorder.gate
 
     @property
     def state(self) -> EngineState:
@@ -151,9 +177,9 @@ class ProcessingEngine:
             with self._selection_lock:
                 context.selected_models = selected
             with self._last_frame_lock:
-                last_frame = None if context.last_frame is None else context.last_frame.copy()
-            if last_frame is not None and self._context_has_state(context, EngineState.RUNNING):
-                self._offer_frame(context, FramePacket(last_frame, -1))
+                last_packet = self._copy_for_reprocess(context.last_packet)
+            if last_packet is not None and self._context_has_state(context, EngineState.RUNNING):
+                self._offer_frame(context, last_packet)
         names = [self._manager.registry.get_model(item).short_name for item in selected]
         self._emit_status("Aktif: " + (", ".join(names) if names else "model seçilmedi"))
 
@@ -174,9 +200,9 @@ class ProcessingEngine:
         if context is None:
             return
         with self._last_frame_lock:
-            last_frame = None if context.last_frame is None else context.last_frame.copy()
-        if last_frame is not None and self._context_has_state(context, EngineState.RUNNING):
-            self._offer_frame(context, FramePacket(last_frame, -1))
+            last_packet = self._copy_for_reprocess(context.last_packet)
+        if last_packet is not None and self._context_has_state(context, EngineState.RUNNING):
+            self._offer_frame(context, last_packet)
 
     def set_performance_profile(self, profile: PerformanceProfile | str) -> None:
         self._manager.set_performance_profile(profile)
@@ -184,9 +210,9 @@ class ProcessingEngine:
         if context is None:
             return
         with self._last_frame_lock:
-            last_frame = context.last_frame
-        if last_frame is not None and self._context_has_state(context, EngineState.RUNNING):
-            self._offer_frame(context, FramePacket(last_frame, -1))
+            last_packet = self._copy_for_reprocess(context.last_packet)
+        if last_packet is not None and self._context_has_state(context, EngineState.RUNNING):
+            self._offer_frame(context, last_packet)
 
     def request_stop(self) -> int | None:
         """Signal the active run to stop and return immediately.
@@ -272,7 +298,16 @@ class ProcessingEngine:
                 worker.join()
         self._drain_queue(context)
         with self._last_frame_lock:
-            context.last_frame = None
+            context.last_packet = None
+        try:
+            self._gate.finish_run(context.run_id)
+        except Exception as exc:
+            self._journal.app_event(
+                LogLevel.WARNING,
+                "Medya kapısı çalışma durumu temizlenemedi.",
+                run_id=context.run_id,
+                media_error=str(exc),
+            )
 
         emit_stopped = context.stop_requested and not context.failed
         with self._lifecycle_lock:
@@ -309,6 +344,19 @@ class ProcessingEngine:
         self._shutdown_thread.start()
 
     def _shutdown_loop(self) -> None:
+        try:
+            released = self._recorder.release_recorder()
+            if not released:
+                self._journal.app_event(
+                    LogLevel.WARNING,
+                    "Medya recorder kapanışı zaman aşımına uğradı.",
+                )
+        except Exception as exc:
+            self._journal.app_event(
+                LogLevel.WARNING,
+                "Medya recorder kapatılamadı.",
+                media_error=str(exc),
+            )
         try:
             self._manager.release_models()
         except Exception as exc:
@@ -348,11 +396,10 @@ class ProcessingEngine:
             for sequence, frame in enumerate(source.get_stream(context.stop_event)):
                 if context.stop_event.is_set():
                     break
+                packet = FramePacket(frame, sequence)
                 with self._last_frame_lock:
-                    # Kaynak her okumada yeni ndarray üretir; model katmanı ham
-                    # kareyi değiştirmez. Referansı saklamak iki büyük kopyayı önler.
-                    context.last_frame = frame
-                self._offer_frame(context, FramePacket(frame, sequence))
+                    context.last_packet = packet
+                self._offer_frame(context, packet)
             if not context.stop_event.is_set() and not source.is_static:
                 self._emit_for_context(
                     context,
@@ -385,12 +432,20 @@ class ProcessingEngine:
                 with self._selection_lock:
                     selected = context.selected_models
                 started = time.perf_counter()
-                result: AnalysisResult = self._manager.run_models(packet.frame, selected)
+                if self._recorder.enabled:
+                    result = self._manager.run_models(
+                        packet.frame,
+                        selected,
+                        capture_annotations=True,
+                    )
+                else:
+                    result = self._manager.run_models(packet.frame, selected)
                 if context.stop_event.is_set():
                     continue
                 total_ms = (time.perf_counter() - started) * 1000
                 smoothed_ms = total_ms if smoothed_ms is None else (0.22 * total_ms) + (0.78 * smoothed_ms)
                 fps = 1000.0 / smoothed_ms if smoothed_ms > 0 else 0.0
+                capture_ids = self._capture_media(context, packet, result)
                 self._emit_for_context(
                     context,
                     EngineEvent(
@@ -404,17 +459,101 @@ class ProcessingEngine:
                     ),
                 )
                 for stat in result.stats:
+                    journal_signature = detection_signature(
+                        stat.objects,
+                        stat.object_count,
+                    )
+                    correlation = {}
+                    if stat.model_id in capture_ids:
+                        correlation["capture_id"] = capture_ids[stat.model_id]
                     self._journal.detection(
                         run_id=context.run_id,
                         model_id=stat.model_id,
                         display_name=stat.display_name,
                         object_count=stat.object_count,
                         elapsed_ms=stat.elapsed_ms,
+                        signature=journal_signature,
+                        objects=stat.objects,
+                        **correlation,
                     )
             except Exception as exc:
                 self._fail_run(context, f"Model çalıştırma hatası: {exc}")
             finally:
                 context.frame_queue.task_done()
+
+    def _capture_media(
+        self,
+        context: _RunContext,
+        packet: FramePacket,
+        result: AnalysisResult,
+    ) -> dict[str, str]:
+        """Best-effort medya yolunu inference hata alanından izole eder."""
+
+        if not self._recorder.enabled:
+            return {}
+        try:
+            observations = tuple(
+                GateObservation(
+                    model_id=stat.model_id,
+                    signature=snapshot_signature(
+                        stat.objects,
+                        stat.object_count,
+                        packet.frame.shape,
+                    ),
+                    object_count=stat.object_count,
+                )
+                for stat in result.stats
+            )
+            gate_now = time.monotonic()
+            decision = self._gate.evaluate(
+                context.run_id,
+                observations,
+                is_static=context.source.is_static,
+                now=gate_now,
+            )
+            if decision.warning is not None:
+                self._journal.app_event(
+                    LogLevel.WARNING,
+                    "Medya yakalama tavanına ulaşıldı.",
+                    run_id=context.run_id,
+                    media_limit=decision.warning,
+                )
+            if not decision.capture:
+                return {}
+
+            capture_id = str(uuid.uuid4())
+            snapshot = Snapshot(
+                capture_id=capture_id,
+                timestamp=packet.captured_timestamp,
+                run_id=context.run_id,
+                source_name=context.source.display_name,
+                source_kind=context.source.kind.value,
+                frame_sequence=packet.sequence,
+                is_reprocess=packet.is_reprocess,
+                models=tuple(
+                    CaptureModel(
+                        model_id=item.model_id,
+                        signature=item.signature,
+                        object_count=item.object_count,
+                    )
+                    for item in decision.models
+                ),
+            )
+            annotated = result.annotated_frame
+            if annotated is None:
+                annotated = result.frame
+            if not self._recorder.submit(packet.frame, annotated, snapshot):
+                return {}
+            self._gate.commit(context.run_id, decision.models, now=gate_now)
+            return {item.model_id: capture_id for item in decision.models}
+        except Exception as exc:
+            self._journal.app_event(
+                LogLevel.WARNING,
+                "Medya yakalama adımı başarısız oldu; inference devam ediyor.",
+                run_id=context.run_id,
+                media_error=str(exc),
+            )
+            return {}
 
     def _fail_run(self, context: _RunContext, message: str) -> None:
         with self._lifecycle_lock:
@@ -441,6 +580,18 @@ class ProcessingEngine:
                 context.frame_queue.put_nowait(packet)
             except queue.Full:
                 pass
+
+    @staticmethod
+    def _copy_for_reprocess(packet: FramePacket | None) -> FramePacket | None:
+        if packet is None:
+            return None
+        return FramePacket(
+            frame=packet.frame.copy(),
+            sequence=packet.sequence,
+            captured_at=packet.captured_at,
+            captured_timestamp=packet.captured_timestamp,
+            is_reprocess=True,
+        )
 
     @staticmethod
     def _drain_queue(context: _RunContext) -> None:

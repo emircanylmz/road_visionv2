@@ -15,6 +15,7 @@ from ..camera import Camera, CameraInfo
 from ..config import APP_CONFIG, MODEL_SPECS, PerformanceProfile
 from ..engine import EngineEvent, EngineState, ProcessingEngine
 from ..logbook import EventJournal, LogLevel, LogRecord, SessionLogSink, create_default_journal
+from ..media import create_default_recorder
 from ..sources import SourceFactory, SourceKind
 
 
@@ -45,7 +46,12 @@ class RoadVisionApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._events: queue.Queue[EngineEvent] = queue.Queue()
-        self.engine = ProcessingEngine(self._events.put, journal=self._journal)
+        self._recorder = create_default_recorder(self._journal)
+        self.engine = ProcessingEngine(
+            self._events.put,
+            journal=self._journal,
+            recorder=self._recorder,
+        )
         self._journal.app_event(
             LogLevel.INFO,
             "RoadVision başlatıldı.",

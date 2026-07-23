@@ -1,8 +1,12 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.0.1 — 22 Temmuz 2026
+**Kararlı sürüm:** v1.1.0 — 23 Temmuz 2026
 
-İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), güncel geliştirmeler için [CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı ve UI entegrasyonu [LOGGING.md](LOGGING.md) belgesinde ayrıntılı olarak açıklanır.
+İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), bu sürümün
+özeti için [VERSION_1_1.md](VERSION_1_1.md), tüm değişiklikler için
+[CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı
+[LOGGING.md](LOGGING.md), PostgreSQL ve medya kaydı [DATABASE.md](DATABASE.md)
+belgelerinde açıklanır.
 
 Bu proje, `models.json` kataloğundaki YOLO modellerini kamera, fotoğraf veya video üzerinde tek tek ya da birlikte çalıştıran modüler bir masaüstü arayüzüdür. İşlem başladıktan sonra model seçimi ve modele özel güven eşiği değiştirilebilir; fotoğraflarda son kare otomatik olarak yeniden işlenir, kamera/video akışında yeni seçim takip eden karelere uygulanır.
 
@@ -103,8 +107,9 @@ macOS AVFoundation kamera indekslerini ardışık sunduğu için tarama ilk boş
 ```text
 app.py
 └── RoadVisionApp                 # Yalnızca Tk ana thread'inde UI günceller
-    ├── EventJournal              # JSONL + canlı oturum günlüğü
+    ├── EventJournal              # JSONL + PostgreSQL + canlı oturum günlüğü
     └── ProcessingEngine          # Worker yaşam döngüsü ve latest-frame kuyruğu
+        ├── MediaRecorder         # Sınırlı async JPEG + MediaSink
         ├── MediaSource
         │   ├── CameraSource ── Camera
         │   ├── ImageSource
@@ -138,11 +143,19 @@ python3 -m unittest discover -s tests -v
 
 Testler kamera yaşam döngüsünü, Unicode fotoğraf yolunu, image source davranışını, en az bir model kuralını ve çalışan akışta dinamik model değişimini kapsar.
 
-Günlük testleri; JSONL yazımı ve rotasyonu, seviye filtresi, kuyruk taşması, sink hata izolasyonu, tekrar bastırma ve canlı UI kuyruğunu da doğrular.
+Günlük/veritabanı/medya testleri; JSONL yazımı ve rotasyonu, seviye filtresi,
+kuyruk taşması, sink hata izolasyonu, tekrar bastırma, PostgreSQL migration,
+görüntü kapısı, JPEG tekilleştirme ve capture korelasyonunu da doğrular.
+
+Docker PostgreSQL kurulumu, pgAdmin sorguları, görüntü dışa aktarma ve saklama
+kotası için [DATABASE.md](DATABASE.md); gözden geçirilmiş tasarım kararları
+için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) dosyasına bakın.
 
 ## Sürüm geçmişi ve geri dönüş
 
-Kararlı sürümler Git etiketleriyle, devam eden çalışma ise ayrı dallarla korunur. Günlük/UI geliştirmesi `codex/logbook-ui` dalındadır; mevcut `release/v1.0.1`, `v1.0.1` ve `v1.0.0` geçmişi değiştirilmez.
+Kararlı sürümler Git etiketleriyle, devam eden çalışma ise ayrı dallarla
+korunur. v1.1.0 geliştirmesi `codex/release-v1.1.0` dalındadır; mevcut
+`release/v1.0.1`, `v1.0.1` ve `v1.0.0` geçmişi değiştirilmez.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:
 
@@ -157,7 +170,7 @@ Eski sürüm üzerinde yeni değişiklik yapmak isterseniz etiketten ayrı bir d
 git switch -c inceleme/v1.0.1 v1.0.1
 ```
 
-Güncel geliştirme dalına dönmek için `git switch codex/logbook-ui` kullanılabilir.
+Güncel sürüm dalına dönmek için `git switch codex/release-v1.1.0` kullanılabilir.
 
 ## Model klasörleri
 

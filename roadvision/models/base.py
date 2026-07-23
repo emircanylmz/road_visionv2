@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from ..config import ModelSpec
+from .detections import DetectedObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +16,10 @@ class ModelRunStat:
     display_name: str
     object_count: int
     elapsed_ms: float
+    # Tekil tespitler: tür (class), doğruluk (confidence) ve konum. Günlük ve
+    # veritabanı katmanı bu alandan beslenir; geriye dönük uyumluluk için
+    # varsayılanı boştur.
+    objects: tuple[DetectedObject, ...] = ()
 
 
 class ModelAdapter(ABC):

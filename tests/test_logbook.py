@@ -66,6 +66,22 @@ class DetectionSuppressorTests(unittest.TestCase):
             self.assertFalse(decision.should_log)
         self.assertEqual(decision.repeated_frames, 10)
 
+    def test_forced_media_correlation_logs_same_signature(self) -> None:
+        suppressor = DetectionSuppressor(heartbeat_seconds=0)
+        suppressor.observe(1, "pothole", 2, now=100.0)
+
+        decision = suppressor.observe(
+            1,
+            "pothole",
+            2,
+            now=101.0,
+            force_log=True,
+        )
+
+        self.assertTrue(decision.should_log)
+        self.assertEqual(decision.reason, "capture")
+        self.assertEqual(decision.repeated_frames, 2)
+
     def test_signature_change_logs_and_summarizes_previous_streak(self) -> None:
         suppressor = DetectionSuppressor()
         suppressor.observe(1, "pothole", 2, now=100.0)
