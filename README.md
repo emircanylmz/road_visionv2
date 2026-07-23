@@ -1,9 +1,9 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.1.0 — 23 Temmuz 2026
+**Kararlı sürüm:** v1.2.0 — 23 Temmuz 2026
 
 İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), bu sürümün
-özeti için [VERSION_1_1.md](VERSION_1_1.md), tüm değişiklikler için
+özeti için [VERSION_1_2.md](VERSION_1_2.md), tüm değişiklikler için
 [CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı
 [LOGGING.md](LOGGING.md), PostgreSQL ve medya kaydı [DATABASE.md](DATABASE.md)
 belgelerinde açıklanır.
@@ -69,6 +69,7 @@ Arayüzde:
 3. Her model için güven eşiğini ve Box/Maske görünürlüğünü ayarlayın, ardından **Başlat** düğmesine basın.
 4. İşlem sürerken model kutularını açıp kapatabilirsiniz.
 5. Sağ taraftaki **Oturum Günlüğü** sekmesinden uygulama olaylarını ve model tespitlerini anlık izleyebilirsiniz.
+6. 📷 işaretli tespit satırına çift tıklayarak işaretli veya orijinal kayıt görüntüsünü açabilirsiniz.
 
 ## Olay ve tespit günlüğü
 
@@ -153,9 +154,9 @@ için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) dosyasına bakın.
 
 ## Sürüm geçmişi ve geri dönüş
 
-Kararlı sürümler Git etiketleriyle, devam eden çalışma ise ayrı dallarla
-korunur. v1.1.0 geliştirmesi `release/v1.1.0` dalındadır; mevcut
-`release/v1.0.1`, `v1.0.1` ve `v1.0.0` geçmişi değiştirilmez.
+Kararlı sürümler Git etiketleriyle korunur. Güncel geliştirme `main`
+dalındadır; `v1.2.0`, `v1.1.0`, `v1.0.1` ve `v1.0.0` sürümleri kendi
+etiketlerinden açılabilir.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:
 
@@ -170,7 +171,7 @@ Eski sürüm üzerinde yeni değişiklik yapmak isterseniz etiketten ayrı bir d
 git switch -c inceleme/v1.0.1 v1.0.1
 ```
 
-Güncel sürüm dalına dönmek için `git switch release/v1.1.0` kullanılabilir.
+Güncel sürüm dalına dönmek için `git switch main` kullanılabilir.
 
 ## Model klasörleri
 
