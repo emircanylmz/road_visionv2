@@ -83,6 +83,28 @@ class ModelParallelismTests(unittest.TestCase):
         self.assertTrue(np.array_equal(result.frame, frame))
         manager.release_models()
 
+    def test_media_canvas_is_annotated_even_when_ui_annotation_is_hidden(self) -> None:
+        manager = ModelManager(device="cpu")
+        spec = manager.get_available_models()[0]
+        adapter = HiddenAnnotationAdapter(spec)
+        manager.prepare_model = lambda _model_id: adapter  # type: ignore[method-assign]
+        manager.set_annotation_enabled(spec.id, False)
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+
+        result = manager.run_models(
+            frame,
+            frozenset({spec.id}),
+            capture_annotations=True,
+        )
+
+        self.assertEqual(adapter.predict_calls, 1)
+        self.assertEqual(adapter.annotate_calls, 1)
+        self.assertTrue(np.array_equal(result.frame, frame))
+        self.assertIsNotNone(result.annotated_frame)
+        assert result.annotated_frame is not None
+        self.assertTrue(np.all(result.annotated_frame[:, :, 0] == 255))
+        manager.release_models()
+
     def test_model_confidence_only_updates_target_adapter(self) -> None:
         manager = ModelManager(device="cpu")
         first, second = manager.get_available_models()[:2]

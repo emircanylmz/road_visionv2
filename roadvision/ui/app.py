@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import queue
 import threading
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -12,6 +14,8 @@ from PIL import Image, ImageTk
 from ..camera import Camera, CameraInfo
 from ..config import APP_CONFIG, MODEL_SPECS, PerformanceProfile
 from ..engine import EngineEvent, EngineState, ProcessingEngine
+from ..logbook import EventJournal, LogLevel, LogRecord, SessionLogSink, create_default_journal
+from ..media import create_default_recorder
 from ..sources import SourceFactory, SourceKind
 
 
@@ -25,11 +29,16 @@ ACCENT_DARK = "#163e33"
 DANGER = "#ff6577"
 BORDER = "#263646"
 PREVIEW_PLACEHOLDER = "Kaynak seçildikten sonra çıktı burada görünecek"
+MAX_VISIBLE_LOG_ROWS = 1000
 
 
 class RoadVisionApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, journal: EventJournal | None = None) -> None:
         self.root = root
+        self._journal = journal or create_default_journal()
+        self._session_log_sink = SessionLogSink()
+        self._journal.add_sink(self._session_log_sink)
+        self._journal.prepare_journal()
         self.root.title(APP_CONFIG.title)
         self.root.geometry("1360x820")
         self.root.minsize(1080, 700)
@@ -37,7 +46,18 @@ class RoadVisionApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._events: queue.Queue[EngineEvent] = queue.Queue()
-        self.engine = ProcessingEngine(self._events.put)
+        self._recorder = create_default_recorder(self._journal)
+        self.engine = ProcessingEngine(
+            self._events.put,
+            journal=self._journal,
+            recorder=self._recorder,
+        )
+        self._journal.app_event(
+            LogLevel.INFO,
+            "RoadVision başlatıldı.",
+            build=APP_CONFIG.build,
+            device=self.engine.device,
+        )
         self._photo: ImageTk.PhotoImage | None = None
         self._last_display_frame = None
         self._camera_infos: list[CameraInfo] = []
@@ -45,6 +65,7 @@ class RoadVisionApp:
         self._active_run_id: int | None = None
         self._closing = False
         self._closed = False
+        self._session_log_count = 0
 
         self.source_kind = tk.StringVar(value=SourceKind.CAMERA.value)
         self.source_path = tk.StringVar(value="")
@@ -110,6 +131,40 @@ class RoadVisionApp:
         style.map("TCombobox", fieldbackground=[("readonly", PANEL_2)], foreground=[("readonly", TEXT)])
         style.configure("Horizontal.TScale", background=PANEL, troughcolor=PANEL_2)
         style.configure("Model.Horizontal.TScale", background=PANEL_2, troughcolor=BORDER)
+        style.configure("TNotebook", background=BG, borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            background=PANEL_2,
+            foreground=MUTED,
+            padding=(16, 9),
+            font=("Helvetica", 10, "bold"),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", PANEL)],
+            foreground=[("selected", ACCENT)],
+        )
+        style.configure(
+            "Log.Treeview",
+            background="#05090d",
+            fieldbackground="#05090d",
+            foreground=TEXT,
+            rowheight=25,
+            borderwidth=0,
+            font=("Helvetica", 9),
+        )
+        style.map(
+            "Log.Treeview",
+            background=[("selected", ACCENT_DARK)],
+            foreground=[("selected", TEXT)],
+        )
+        style.configure(
+            "Log.Treeview.Heading",
+            background=PANEL_2,
+            foreground=TEXT,
+            relief="flat",
+            font=("Helvetica", 9, "bold"),
+        )
 
     def _build_layout(self) -> None:
         header = ttk.Frame(self.root, padding=(22, 18, 22, 12))
@@ -147,8 +202,11 @@ class RoadVisionApp:
         self.start_button = ttk.Button(self.sidebar, text="Başlat", style="Accent.TButton", command=self._toggle_processing)
         self.start_button.grid(row=9, column=0, sticky="ew", pady=(15, 0))
 
-        preview_panel = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        preview_panel.grid(row=0, column=1, sticky="nsew")
+        self.content_tabs = ttk.Notebook(body)
+        self.content_tabs.grid(row=0, column=1, sticky="nsew")
+
+        preview_panel = ttk.Frame(self.content_tabs, style="Panel.TFrame", padding=12)
+        self.content_tabs.add(preview_panel, text="Canlı Önizleme")
         preview_panel.columnconfigure(0, weight=1)
         preview_panel.rowconfigure(1, weight=1)
 
@@ -174,6 +232,76 @@ class RoadVisionApp:
         self.status_dot = tk.Label(status_bar, text="●", bg=PANEL, fg=MUTED, font=("Helvetica", 10))
         self.status_dot.pack(side="left", padx=(2, 8))
         ttk.Label(status_bar, textvariable=self.status_text, style="Muted.TLabel").pack(side="left", fill="x", expand=True)
+
+        self._build_log_panel()
+
+    def _build_log_panel(self) -> None:
+        log_panel = ttk.Frame(self.content_tabs, style="Panel.TFrame", padding=12)
+        self.content_tabs.add(log_panel, text="Oturum Günlüğü")
+        log_panel.columnconfigure(0, weight=1)
+        log_panel.rowconfigure(1, weight=1)
+
+        header = ttk.Frame(log_panel, style="Panel.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(1, 10))
+        ttk.Label(header, text="Anlık Oturum Kayıtları", style="Section.TLabel").pack(side="left")
+        self.log_count_text = tk.StringVar(value="0 kayıt")
+        ttk.Button(header, text="Ekranı Temizle", command=self._clear_session_logs).pack(side="right")
+        ttk.Label(header, textvariable=self.log_count_text, style="Stat.TLabel").pack(
+            side="right", padx=(0, 12)
+        )
+
+        table = ttk.Frame(log_panel, style="Panel.TFrame")
+        table.grid(row=1, column=0, sticky="nsew")
+        table.columnconfigure(0, weight=1)
+        table.rowconfigure(0, weight=1)
+
+        columns = ("time", "level", "category", "run", "model", "message", "details")
+        self.log_tree = ttk.Treeview(
+            table,
+            columns=columns,
+            show="headings",
+            style="Log.Treeview",
+            selectmode="browse",
+        )
+        headings = {
+            "time": "Saat",
+            "level": "Seviye",
+            "category": "Kategori",
+            "run": "Run",
+            "model": "Model",
+            "message": "Mesaj",
+            "details": "Ayrıntılar",
+        }
+        widths = {
+            "time": (95, False),
+            "level": (75, False),
+            "category": (85, False),
+            "run": (55, False),
+            "model": (120, False),
+            "message": (320, True),
+            "details": (300, True),
+        }
+        for column in columns:
+            self.log_tree.heading(column, text=headings[column])
+            width, stretch = widths[column]
+            self.log_tree.column(column, width=width, minwidth=width, stretch=stretch)
+        self.log_tree.tag_configure(LogLevel.DEBUG.value, foreground=MUTED)
+        self.log_tree.tag_configure(LogLevel.INFO.value, foreground=TEXT)
+        self.log_tree.tag_configure(LogLevel.WARNING.value, foreground="#ffd166")
+        self.log_tree.tag_configure(LogLevel.ERROR.value, foreground=DANGER)
+
+        vertical = ttk.Scrollbar(table, orient="vertical", command=self.log_tree.yview)
+        horizontal = ttk.Scrollbar(table, orient="horizontal", command=self.log_tree.xview)
+        self.log_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.log_tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+
+        ttk.Label(
+            log_panel,
+            text="Bu ekran yalnız mevcut oturumu gösterir; JSONL dosya kaydı arka planda sürer.",
+            style="Muted.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
     def _build_source_section(self, parent: ttk.Frame) -> None:
         section = ttk.Frame(parent, style="Panel.TFrame")
@@ -575,6 +703,7 @@ class RoadVisionApp:
             self._update_start_availability()
 
     def _poll_events(self) -> None:
+        self._poll_log_records()
         latest_frame: EngineEvent | None = None
         try:
             while not self._closed:
@@ -598,6 +727,51 @@ class RoadVisionApp:
         if self.root.winfo_exists():
             self.root.after(33, self._poll_events)
 
+    def _poll_log_records(self) -> None:
+        sink = getattr(self, "_session_log_sink", None)
+        tree = getattr(self, "log_tree", None)
+        if sink is None or tree is None:
+            return
+        records = sink.drain()
+        if not records:
+            return
+        for record in records:
+            self._append_log_record(record)
+        tree.yview_moveto(1.0)
+
+    def _append_log_record(self, record: LogRecord) -> None:
+        local_time = datetime.fromtimestamp(record.timestamp).astimezone().strftime("%H:%M:%S")
+        details = json.dumps(record.payload, ensure_ascii=False, default=str) if record.payload else ""
+        self.log_tree.insert(
+            "",
+            "end",
+            values=(
+                local_time,
+                record.level.value.upper(),
+                record.category.value,
+                record.run_id if record.run_id is not None else "—",
+                record.model_id or "—",
+                record.message,
+                details,
+            ),
+            tags=(record.level.value,),
+        )
+        self._session_log_count += 1
+        if self._session_log_count > MAX_VISIBLE_LOG_ROWS:
+            rows = self.log_tree.get_children()
+            excess = self._session_log_count - MAX_VISIBLE_LOG_ROWS
+            self.log_tree.delete(*rows[:excess])
+            self._session_log_count -= excess
+        self.log_count_text.set(f"{self._session_log_count} kayıt")
+
+    def _clear_session_logs(self) -> None:
+        self._session_log_sink.drain()
+        rows = self.log_tree.get_children()
+        if rows:
+            self.log_tree.delete(*rows)
+        self._session_log_count = 0
+        self.log_count_text.set("0 kayıt")
+
     def _event_belongs_to_active_run(self, event: EngineEvent) -> bool:
         return self._active_run_id is not None and event.run_id == self._active_run_id
 
@@ -605,6 +779,7 @@ class RoadVisionApp:
         if event.kind == "shutdown_complete":
             if self._closing and not self._closed:
                 self._closed = True
+                self._journal.release_journal()
                 self.root.destroy()
             return
         if not self._event_belongs_to_active_run(event):

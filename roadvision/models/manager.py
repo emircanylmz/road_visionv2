@@ -13,6 +13,7 @@ import torch
 
 from ..config import PerformanceProfile
 from .base import ModelRunStat
+from .detections import extract_objects
 from .registry import ModelRegistry
 from .yolo import YoloModelAdapter
 
@@ -21,6 +22,9 @@ from .yolo import YoloModelAdapter
 class AnalysisResult:
     frame: np.ndarray
     stats: tuple[ModelRunStat, ...]
+    # Medya kaydı etkinse UI görünürlük seçiminden bağımsız, tüm seçili
+    # modellerin işaretlerini taşıyan ortak canvas.
+    annotated_frame: np.ndarray | None = None
 
 
 def select_device() -> str:
@@ -106,14 +110,36 @@ class ModelManager:
         for model_id in model_ids:
             self.prepare_model(model_id)
 
-    def run_models(self, frame: np.ndarray, model_ids: frozenset[str]) -> AnalysisResult:
+    def run_models(
+        self,
+        frame: np.ndarray,
+        model_ids: frozenset[str],
+        *,
+        capture_annotations: bool = False,
+    ) -> AnalysisResult:
         self.registry.validate_models(model_ids)
         if not model_ids:
-            return AnalysisResult(frame.copy(), ())
+            copied = frame.copy()
+            return AnalysisResult(copied, (), copied if capture_annotations else None)
         canvas = frame.copy()
         stats: list[ModelRunStat] = []
         ordered_ids = [spec.id for spec in self.registry.get_available_models() if spec.id in model_ids]
         adapters = [self.prepare_model(model_id) for model_id in ordered_ids]
+        # Tek inference boyunca görünürlük snapshot'ı sabittir. Hepsi görünürse
+        # UI canvas aynı zamanda eksiksiz medya canvas'ıdır; ek annotate yoktur.
+        with self._lock:
+            annotation_visibility = {
+                model_id: self._annotation_enabled.get(model_id, True)
+                for model_id in ordered_ids
+            }
+        shared_capture_canvas = capture_annotations and all(annotation_visibility.values())
+        capture_canvas = (
+            canvas
+            if shared_capture_canvas
+            else frame.copy()
+            if capture_annotations
+            else None
+        )
 
         all_cpu = all(adapter.device == "cpu" for adapter in adapters)
         if all_cpu and len(adapters) > 1:
@@ -121,9 +147,23 @@ class ModelManager:
             futures = [self._executor.submit(self._predict_timed, adapter, frame) for adapter in adapters]
             predictions = [future.result() for future in futures]
             for adapter, (prediction, elapsed_ms) in zip(adapters, predictions):
-                canvas, count = self._render_or_count(canvas, adapter, prediction)
+                canvas, capture_canvas, count = self._render_or_count(
+                    canvas,
+                    capture_canvas,
+                    adapter,
+                    prediction,
+                    annotation_enabled=annotation_visibility[adapter.spec.id],
+                    capture_annotations=capture_annotations,
+                    shared_capture_canvas=shared_capture_canvas,
+                )
                 stats.append(
-                    ModelRunStat(adapter.spec.id, adapter.spec.display_name, count, elapsed_ms)
+                    ModelRunStat(
+                        adapter.spec.id,
+                        adapter.spec.display_name,
+                        count,
+                        elapsed_ms,
+                        objects=extract_objects(prediction, adapter.spec.id),
+                    )
                 )
         else:
             if all_cpu:
@@ -133,18 +173,47 @@ class ModelManager:
                     self._configure_cpu_threads(1)
                 prediction, elapsed_ms = self._predict_timed(adapter, frame)
                 self._apply_device_fallback(adapter)
-                canvas, count = self._render_or_count(canvas, adapter, prediction)
-                stats.append(
-                    ModelRunStat(adapter.spec.id, adapter.spec.display_name, count, elapsed_ms)
+                canvas, capture_canvas, count = self._render_or_count(
+                    canvas,
+                    capture_canvas,
+                    adapter,
+                    prediction,
+                    annotation_enabled=annotation_visibility[adapter.spec.id],
+                    capture_annotations=capture_annotations,
+                    shared_capture_canvas=shared_capture_canvas,
                 )
-        return AnalysisResult(canvas, tuple(stats))
+                stats.append(
+                    ModelRunStat(
+                        adapter.spec.id,
+                        adapter.spec.display_name,
+                        count,
+                        elapsed_ms,
+                        objects=extract_objects(prediction, adapter.spec.id),
+                    )
+                )
+        return AnalysisResult(canvas, tuple(stats), capture_canvas)
 
-    def _render_or_count(self, canvas, adapter: YoloModelAdapter, prediction):
-        with self._lock:
-            annotation_enabled = self._annotation_enabled.get(adapter.spec.id, True)
+    def _render_or_count(
+        self,
+        canvas,
+        capture_canvas,
+        adapter: YoloModelAdapter,
+        prediction,
+        *,
+        annotation_enabled: bool,
+        capture_annotations: bool,
+        shared_capture_canvas: bool,
+    ):
         if annotation_enabled:
-            return adapter.annotate(canvas, prediction)
-        return canvas, adapter.count_detections(prediction)
+            canvas, count = adapter.annotate(canvas, prediction)
+        else:
+            count = adapter.count_detections(prediction)
+        if capture_annotations:
+            if shared_capture_canvas:
+                capture_canvas = canvas
+            else:
+                capture_canvas, _ = adapter.annotate(capture_canvas, prediction)
+        return canvas, capture_canvas, count
 
     @staticmethod
     def _predict_timed(adapter: YoloModelAdapter, frame: np.ndarray):

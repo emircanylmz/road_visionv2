@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -31,7 +32,7 @@ class ModelSpec:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     title: str = "RoadVision"
-    build: str = "v1.0.1"
+    build: str = "v1.1.0"
     camera_width: int = 1280
     camera_height: int = 720
     camera_fps: int = 30
@@ -43,6 +44,66 @@ class AppConfig:
 
 
 APP_CONFIG = AppConfig()
+
+
+@dataclass(frozen=True, slots=True)
+class MediaConfig:
+    """Tespit görüntüsü kaydının ortam değişkenleriyle ayarlanabilen sınırları."""
+
+    backend: str = "db"
+    jpeg_quality: int = 80
+    max_edge: int = 1280
+    min_interval_s: float = 2.0
+    max_per_run: int = 200
+    max_per_hour: int = 500
+    queue_size: int = 8
+    queue_max_mb: int = 256
+    retention_days: int = 30
+    max_total_mb: int = 2048
+    shutdown_timeout_s: float = 10.0
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "MediaConfig":
+        source = os.environ if environ is None else environ
+        backend = source.get("ROADVISION_MEDIA", "db").strip().lower()
+        if backend not in {"db", "off"}:
+            raise ValueError("ROADVISION_MEDIA yalnız 'db' veya 'off' olabilir.")
+
+        def integer(name: str, default: int, minimum: int, maximum: int) -> int:
+            raw = source.get(name)
+            try:
+                value = default if raw is None else int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} tam sayı olmalıdır.") from exc
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name}, {minimum}–{maximum} aralığında olmalıdır.")
+            return value
+
+        def number(name: str, default: float, minimum: float, maximum: float) -> float:
+            raw = source.get(name)
+            try:
+                value = default if raw is None else float(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} sayı olmalıdır.") from exc
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name}, {minimum}–{maximum} aralığında olmalıdır.")
+            return value
+
+        return cls(
+            backend=backend,
+            jpeg_quality=integer("ROADVISION_MEDIA_JPEG_QUALITY", 80, 1, 100),
+            max_edge=integer("ROADVISION_MEDIA_MAX_EDGE", 1280, 64, 16_384),
+            min_interval_s=number("ROADVISION_MEDIA_MIN_INTERVAL_S", 2.0, 0.0, 3600.0),
+            max_per_run=integer("ROADVISION_MEDIA_MAX_PER_RUN", 200, 1, 1_000_000),
+            max_per_hour=integer("ROADVISION_MEDIA_MAX_PER_HOUR", 500, 1, 1_000_000),
+            queue_size=integer("ROADVISION_MEDIA_QUEUE_SIZE", 8, 1, 1024),
+            queue_max_mb=integer("ROADVISION_MEDIA_QUEUE_MAX_MB", 256, 8, 16_384),
+            retention_days=integer("ROADVISION_MEDIA_RETENTION_DAYS", 30, 1, 36_500),
+            max_total_mb=integer("ROADVISION_MEDIA_MAX_TOTAL_MB", 2048, 1, 10_000_000),
+            shutdown_timeout_s=number(
+                "ROADVISION_MEDIA_SHUTDOWN_TIMEOUT_S", 10.0, 0.1, 300.0
+            ),
+        )
 
 
 class ModelConfigError(ValueError):

@@ -53,13 +53,13 @@ Yeni bir inference backend'inin uygulaması gereken soyut sözleşmedir:
 
 - `get_available_models()`
 - `prepare_model(model_id)` / `prepare_models(model_ids)`
-- `run_models(frame, model_ids)`
+- `run_models(frame, model_ids, capture_annotations=False)`
 - `set_confidence(value)`
 - `set_model_confidence(model_id, value)`
 - `set_annotation_enabled(model_id, enabled)`
 - `release_models()`
 
-Model örneklerinin tek sahibidir. Lazy loading, cache, model bazlı güven eşikleri, çizim görünürlüğü ve aygıt seçimi burada tutulur. Her model ham kare üzerinde tahmin yapar; görünür çizimler ortak kopyaya sırayla eklenir. Çizimi kapalı bir model yine tahmin ve nesne sayımı yapar. Bu sayede önceki modelin çizdiği kutular sonraki modelin tahmin girdisini kirletmez.
+Model örneklerinin tek sahibidir. Lazy loading, cache, model bazlı güven eşikleri, çizim görünürlüğü ve aygıt seçimi burada tutulur. Her model ham kare üzerinde tahmin yapar; görünür çizimler ortak kopyaya sırayla eklenir. Çizimi kapalı bir model yine tahmin ve nesne sayımı yapar. Medya kaydı etkinse ayrıca UI görünürlüğünden bağımsız, tüm model işaretlerini taşıyan `annotated_frame` üretilir. Bu sayede önceki modelin çizdiği kutular sonraki modelin tahmin girdisini kirletmez.
 
 ## İşleme katmanı
 
@@ -78,19 +78,53 @@ Model örneklerinin tek sahibidir. Lazy loading, cache, model bazlı güven eşi
 1. **Capture worker:** kaynaktan kareleri okur.
 2. **Inference worker:** en güncel kareyi seçili modellerle işler.
 
-Aradaki `Queue(maxsize=1)` back-pressure stratejisidir. Kuyruk doluysa eski bekleyen kare çıkarılır ve yenisi eklenir. Model seçimi kilit altında atomik olarak değiştirilir. Son ham kare saklandığı için statik fotoğraf, model seçimi veya güven eşiği değişince dosyadan tekrar okunmadan yeniden işlenebilir.
+Aradaki `Queue(maxsize=1)` back-pressure stratejisidir. Kuyruk doluysa eski bekleyen kare çıkarılır ve yenisi eklenir. Model seçimi kilit altında atomik olarak değiştirilir. Son `FramePacket` (kare, kaynak sequence'i, monotonic ve duvar zamanı) saklandığı için statik fotoğraf, model seçimi veya güven eşiği değişince dosyadan tekrar okunmadan ve özgün korelasyon bilgisi kaybolmadan yeniden işlenebilir.
 
 Engine; `started`, `frame`, `status`, `source_ended`, `error` ve `stopped` olayları üretir. UI'a dair hiçbir bağımlılığı yoktur.
+
+Engine'e opsiyonel `EventJournal`, `MediaRecorder` ve `SnapshotGate` enjekte edilir. UI bunları sağlamadığında no-op karşılıklar kullanılır; böylece başsız kullanım ve testler I/O'ya bağımlı kalmaz. Engine yaşam döngüsü olaylarını `app_event`, her modelin kare özetini `detection`, çalışma kapanışını ise `run_finished` ile bildirir. Recorder'ın tek yaşam döngüsü sahibi engine'dir.
+
+## Günlük katmanı
+
+### `LogRecord` ve `LogSink`
+
+`LogRecord`; zaman, seviye, kategori, mesaj, çalışma kimliği, model kimliği ve serbest biçimli payload alanlarından oluşan JSON/veritabanı dostu kayıt modelidir.
+
+`LogSink` hedeflerin `prepare_sink → write_record/flush → release_sink` sözleşmesidir:
+
+- `JsonlFileSink`: satır başına JSON yazar ve boyuta göre dosya döndürür.
+- `ConsoleSink`: uyarı ve hataları stderr'e taşır.
+- `SessionLogSink`: yazıcı thread'inden gelen kayıtları Tk ana thread'inin tüketebileceği sınırlı kuyruğa aktarır.
+- `PostgresSink`: günlükleri ayrı sınırlı kuyruk ve flusher thread'iyle `log_records`, `detection_events` ve `detected_objects` tablolarına açar.
+
+### `EventJournal`
+
+`EventJournal` üretici çağrılarını sınırlı kuyruğa `put_nowait` ile bırakır. Tek yazıcı thread tekrar bastırmayı uygular ve kayıtları bütün sink'lere sıralı biçimde iletir. Bir sink'in hatası diğer hedefleri veya uygulamayı düşürmez. Kuyruk taşarsa üretici bekletilmez; düşen kayıt sayısı sonraki yazılabilen kaydın payload alanına eklenir.
+
+`DetectionSuppressor`, `(run_id, model_id)` anahtarında art arda aynı tespit imzasını tek kayda indirger. İmza değişiminde önceki serinin kare ve süre özeti, uzun sabit serilerde heartbeat, çalışma sonunda kapanış özeti üretilir.
+
+Varsayılan günlük kurulumu sırasıyla kullanıcı cache dizini ve geçici dizini dener; dosya hedefi oluşturulamazsa konsol hedefiyle çalışmayı sürdürür. Ayrıntılar [LOGGING.md](LOGGING.md) belgesindedir.
+
+## Medya kayıt katmanı
+
+### `SnapshotGate`, `MediaRecorder` ve `MediaSink`
+
+`SnapshotGate`, journal tekrar imzasından ayrı olarak sınıf + kuantize bbox/semantic footprint imzası kullanır. Boş/aynı sahneyi, minimum aralığı ve fiziksel run/saat kotalarını inference thread'inde I/O yapmadan değerlendirir. State yalnız recorder işi kabul ettiğinde commit edilir.
+
+`MediaRecorder`, kabul edilen ham ve ortak işaretli karelerin sahiplik kopyasını adet ve RAM-baytı sınırlı kuyruğa alır. Tek worker JPEG kodlar ve `MediaSink`'e yazar. `DbMediaSink`, SHA-256 blob tekilleştirmesi, capture/model idempotency ve otomatik süre/boyut kotasını uygular. `NullRecorder` medya kapalıyken no-op'tur. Ayrıntılar [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) ve [DATABASE.md](DATABASE.md) belgelerindedir.
 
 ## UI katmanı
 
 ### `RoadVisionApp`
 
-Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme ve durum bilgisini yönetir. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme, durum bilgisi ve oturum günlüğünü yönetir. Sağ içerik alanı **Canlı Önizleme** ve **Oturum Günlüğü** sekmelerine ayrılır. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+
+`SessionLogSink` journal yazıcı thread'inde Tk nesnelerine dokunmaz. UI'ın mevcut 33 ms polling döngüsü bekleyen `LogRecord` nesnelerini ana thread'de tabloya aktarır. Oturum kuyruğu son 2.000, görünür tablo son 1.000 kaydı tutar; bu sınırlar uzun video/kamera çalışmalarında belleğin sınırsız büyümesini engeller.
 
 ## Hata ve kaynak yönetimi
 
 - Kaynak hazırlama ya da inference hatası `error` olayına çevrilir.
 - Kamera/video handle'ları hem normal bitişte hem durdurmada serbest bırakılır.
-- Uygulama kapanırken worker'lar durdurulur, ardından model cache'i temizlenir.
+- Uygulama kapanırken run worker'ları durdurulur, medya kuyruğu drain/release edilir, ardından model cache'i temizlenir.
+- `shutdown_complete` olayı işlendiğinde journal kuyruğu boşaltılır, sink'ler flush edilip serbest bırakılır ve ardından Tk penceresi kapatılır.
 - Model dosyaları iş başlamadan registry üzerinden doğrulanır.
