@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +24,11 @@ import numpy as np
 
 from .config import MediaConfig
 from .db import (
+    CaptureBundle,
     MEDIA_ADVISORY_LOCK,
     default_connection_factory,
     ensure_schema,
+    fetch_capture,
     prune_media,
 )
 from .logbook import EventJournal, LogLevel, NullJournal
@@ -699,6 +701,196 @@ class NullRecorder:
 
     def release_recorder(self, timeout: float | None = None) -> bool:
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotFetchResult:
+    generation: int
+    capture_id: str
+    status: str
+    bundle: CaptureBundle | None = None
+    message: str = ""
+
+
+class SnapshotFetcher:
+    """Capture görüntülerini Tk thread'ini bekletmeden okuyan tek worker.
+
+    Worker hiçbir UI callback'i çağırmaz. Sonuçlar nesil kimliğiyle
+    ``drain`` üzerinden alınır; hangi neslin güncel olduğuna UI karar verir.
+    """
+
+    enabled = True
+
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        connection_factory: Callable[[str], Any] = default_connection_factory,
+        cache_size: int = 16,
+    ) -> None:
+        if not dsn.strip():
+            raise ValueError("SnapshotFetcher için DSN boş olamaz.")
+        if cache_size <= 0:
+            raise ValueError("SnapshotFetcher önbellek boyutu pozitif olmalıdır.")
+        self.dsn = dsn
+        self._connection_factory = connection_factory
+        self._cache_size = cache_size
+        self._requests: queue.Queue[tuple[int, str] | None] = queue.Queue()
+        self._results: queue.Queue[SnapshotFetchResult] = queue.Queue()
+        self._cache: OrderedDict[str, CaptureBundle] = OrderedDict()
+        self._generation = 0
+        self._conn: Any = None
+        self._worker: threading.Thread | None = None
+        self._closed = False
+        self._lock = threading.Lock()
+
+    @property
+    def latest_generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def request(self, capture_id: str) -> int:
+        normalized = str(capture_id).strip()
+        if not normalized:
+            raise ValueError("capture_id boş olamaz.")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("SnapshotFetcher kapatıldı.")
+            self._generation += 1
+            generation = self._generation
+            if self._worker is None:
+                self._worker = threading.Thread(
+                    target=self._worker_loop,
+                    name="roadvision-snapshot-fetcher",
+                    daemon=True,
+                )
+                self._worker.start()
+        self._requests.put((generation, normalized))
+        return generation
+
+    def drain(self) -> list[SnapshotFetchResult]:
+        results: list[SnapshotFetchResult] = []
+        while True:
+            try:
+                results.append(self._results.get_nowait())
+            except queue.Empty:
+                return results
+
+    def close(self, timeout: float = 3.0) -> bool:
+        with self._lock:
+            first_close = not self._closed
+            self._closed = True
+            worker = self._worker
+        if worker is None:
+            return True
+        if first_close:
+            while True:
+                try:
+                    self._requests.get_nowait()
+                except queue.Empty:
+                    break
+            self._requests.put(None)
+        worker.join(timeout=max(0.0, timeout))
+        return not worker.is_alive()
+
+    def _worker_loop(self) -> None:
+        try:
+            while True:
+                request = self._requests.get()
+                if request is None:
+                    return
+                generation, capture_id = request
+                bundle = self._cache_get(capture_id)
+                if bundle is not None:
+                    self._results.put(
+                        SnapshotFetchResult(
+                            generation=generation,
+                            capture_id=capture_id,
+                            status="ok",
+                            bundle=bundle,
+                        )
+                    )
+                    continue
+                try:
+                    conn = self._ensure_connection()
+                    bundle = fetch_capture(conn, capture_id)
+                    self._safe_rollback(conn)
+                    if bundle is None:
+                        result = SnapshotFetchResult(
+                            generation=generation,
+                            capture_id=capture_id,
+                            status="not_found",
+                        )
+                    else:
+                        self._cache_put(capture_id, bundle)
+                        result = SnapshotFetchResult(
+                            generation=generation,
+                            capture_id=capture_id,
+                            status="ok",
+                            bundle=bundle,
+                        )
+                except Exception as exc:
+                    self._discard_connection()
+                    detail = str(exc).strip()
+                    result = SnapshotFetchResult(
+                        generation=generation,
+                        capture_id=capture_id,
+                        status="error",
+                        message=detail or exc.__class__.__name__,
+                    )
+                self._results.put(result)
+        finally:
+            self._discard_connection()
+
+    def _ensure_connection(self) -> Any:
+        if self._conn is None:
+            conn = self._connection_factory(self.dsn)
+            try:
+                conn.read_only = True
+            except (AttributeError, TypeError):
+                # Basit test double'ları ve bazı DB-API adaptörleri bu özelliği
+                # sunmayabilir; sorgular yine yalnız SELECT'tir.
+                pass
+            self._conn = conn
+        return self._conn
+
+    def _cache_get(self, capture_id: str) -> CaptureBundle | None:
+        bundle = self._cache.get(capture_id)
+        if bundle is not None:
+            self._cache.move_to_end(capture_id)
+        return bundle
+
+    def _cache_put(self, capture_id: str, bundle: CaptureBundle) -> None:
+        self._cache[capture_id] = bundle
+        self._cache.move_to_end(capture_id)
+        while len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
+
+    @staticmethod
+    def _safe_rollback(conn: Any) -> None:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    def _discard_connection(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        self._safe_rollback(conn)
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def create_default_snapshot_fetcher(
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> SnapshotFetcher | None:
+    source = os.environ if environ is None else environ
+    dsn = source.get("ROADVISION_DB_DSN", "").strip()
+    return SnapshotFetcher(dsn) if dsn else None
 
 
 def create_default_recorder(

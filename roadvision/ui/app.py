@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 import tkinter as tk
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -13,9 +15,14 @@ from PIL import Image, ImageTk
 
 from ..camera import Camera, CameraInfo
 from ..config import APP_CONFIG, MODEL_SPECS, PerformanceProfile
+from ..db import CaptureBundle, CaptureMedia
 from ..engine import EngineEvent, EngineState, ProcessingEngine
 from ..logbook import EventJournal, LogLevel, LogRecord, SessionLogSink, create_default_journal
-from ..media import create_default_recorder
+from ..media import (
+    SnapshotFetchResult,
+    create_default_recorder,
+    create_default_snapshot_fetcher,
+)
 from ..sources import SourceFactory, SourceKind
 
 
@@ -30,6 +37,200 @@ DANGER = "#ff6577"
 BORDER = "#263646"
 PREVIEW_PLACEHOLDER = "Kaynak seçildikten sonra çıktı burada görünecek"
 MAX_VISIBLE_LOG_ROWS = 1000
+
+
+class SnapshotViewerWindow:
+    """Tek bir capture'ın işaretli/orijinal görüntüsünü gösteren pencere."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        on_refresh,
+        on_close,
+    ) -> None:
+        self._on_refresh = on_refresh
+        self._on_close = on_close
+        self._capture_id: str | None = None
+        self._bundle: CaptureBundle | None = None
+        self._pil_image: Image.Image | None = None
+        self._photo: ImageTk.PhotoImage | None = None
+
+        self.window = tk.Toplevel(parent)
+        self.window.title("Tespit Görüntüsü")
+        self.window.geometry("980x720")
+        self.window.minsize(560, 420)
+        self.window.configure(bg=BG)
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        toolbar = ttk.Frame(self.window, style="Panel.TFrame", padding=10)
+        toolbar.pack(fill="x")
+        self.meta_text = tk.StringVar(value="Görüntü seçilmedi.")
+        ttk.Label(toolbar, textvariable=self.meta_text, style="Panel.TLabel").pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(toolbar, text="Yenile", command=self._refresh).pack(side="right")
+        ttk.Button(toolbar, text="Diske Kaydet", command=self._save).pack(
+            side="right", padx=(0, 8)
+        )
+
+        switcher = ttk.Frame(self.window, style="Panel2.TFrame", padding=(10, 6))
+        switcher.pack(fill="x")
+        self.view_kind = tk.StringVar(value="annotated")
+        ttk.Radiobutton(
+            switcher,
+            text="İşaretli",
+            value="annotated",
+            variable=self.view_kind,
+            command=self._select_image,
+        ).pack(side="left")
+        ttk.Radiobutton(
+            switcher,
+            text="Orijinal",
+            value="original",
+            variable=self.view_kind,
+            command=self._select_image,
+        ).pack(side="left", padx=(12, 0))
+
+        self.image_label = tk.Label(
+            self.window,
+            bg="#05090d",
+            fg=MUTED,
+            text="Bir tespit görüntüsü yükleniyor…",
+            font=("Helvetica", 12),
+            anchor="center",
+        )
+        self.image_label.pack(fill="both", expand=True, padx=10, pady=10)
+        self.image_label.bind("<Configure>", self._on_resize)
+
+        self.status_text = tk.StringVar(value="")
+        ttk.Label(
+            self.window,
+            textvariable=self.status_text,
+            style="Subtitle.TLabel",
+        ).pack(fill="x", padx=12, pady=(0, 10))
+
+    def exists(self) -> bool:
+        try:
+            return bool(self.window.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def focus(self) -> None:
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_set()
+
+    def show_loading(self, capture_id: str, message: str = "Görüntü yükleniyor…") -> None:
+        self._capture_id = capture_id
+        self._bundle = None
+        self._pil_image = None
+        self._photo = None
+        self.window.title(f"Tespit Görüntüsü — {capture_id}")
+        self.meta_text.set(capture_id)
+        self.status_text.set(message)
+        self.image_label.configure(image="", text=message)
+        self.focus()
+
+    def show_bundle(self, bundle: CaptureBundle) -> None:
+        self._capture_id = bundle.capture_id
+        self._bundle = bundle
+        timestamp = bundle.ts.astimezone().strftime("%d.%m.%Y %H:%M:%S")
+        source = bundle.source_name or bundle.source_kind or "Bilinmeyen kaynak"
+        model_names = {spec.id: spec.display_name for spec in MODEL_SPECS}
+        models = ", ".join(
+            f"{model_names.get(model_id, model_id)} ({object_count})"
+            for model_id, object_count, _signature in bundle.models
+        ) or "Model bilgisi yok"
+        badge = " · yeniden işleme" if bundle.is_reprocess else ""
+        self.window.title(f"{timestamp} — {source}")
+        self.meta_text.set(f"{timestamp} · {source}{badge} · {models}")
+        self.status_text.set("")
+        self._select_image()
+
+    def show_not_found(self, message: str) -> None:
+        self._bundle = None
+        self._pil_image = None
+        self._photo = None
+        self.status_text.set(message)
+        self.image_label.configure(image="", text=message)
+
+    def show_error(self, message: str) -> None:
+        self._bundle = None
+        self._pil_image = None
+        self._photo = None
+        rendered = f"Veritabanı görüntüsü okunamadı: {message}"
+        self.status_text.set(rendered)
+        self.image_label.configure(image="", text=rendered)
+
+    def close(self) -> None:
+        if not self.exists():
+            return
+        self.window.destroy()
+        self._on_close(self)
+
+    def _refresh(self) -> None:
+        if self._capture_id:
+            self._on_refresh(self._capture_id)
+
+    def _selected_media(self) -> CaptureMedia | None:
+        if self._bundle is None:
+            return None
+        return (
+            self._bundle.original
+            if self.view_kind.get() == "original"
+            else self._bundle.annotated
+        )
+
+    def _select_image(self) -> None:
+        media = self._selected_media()
+        if media is None:
+            return
+        try:
+            with Image.open(BytesIO(media.data)) as decoded:
+                decoded.load()
+                self._pil_image = decoded.copy()
+            self._render_image()
+        except Exception as exc:
+            self.show_error(f"JPEG çözümlenemedi: {exc}")
+
+    def _render_image(self) -> None:
+        if self._pil_image is None:
+            return
+        width = max(200, self.image_label.winfo_width() - 20)
+        height = max(160, self.image_label.winfo_height() - 20)
+        image = self._pil_image.copy()
+        image.thumbnail((width, height), Image.Resampling.BILINEAR)
+        self._photo = ImageTk.PhotoImage(image=image)
+        self.image_label.configure(image=self._photo, text="")
+
+    def _on_resize(self, _event: tk.Event) -> None:
+        self._render_image()
+
+    def _save(self) -> None:
+        media = self._selected_media()
+        if media is None or self._capture_id is None:
+            self.status_text.set("Kaydedilecek görüntü henüz yüklenmedi.")
+            return
+        kind = self.view_kind.get()
+        target = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="Tespit görüntüsünü kaydet",
+            initialfile=f"{self._capture_id}-{kind}.jpg",
+            defaultextension=".jpg",
+            filetypes=(("JPEG görüntüsü", "*.jpg"), ("Tüm dosyalar", "*.*")),
+        )
+        if not target:
+            return
+        try:
+            Path(target).write_bytes(media.data)
+            self.status_text.set(f"Kaydedildi: {target}")
+        except OSError as exc:
+            messagebox.showerror(
+                "Görüntü kaydedilemedi",
+                str(exc),
+                parent=self.window,
+            )
 
 
 class RoadVisionApp:
@@ -47,6 +248,14 @@ class RoadVisionApp:
 
         self._events: queue.Queue[EngineEvent] = queue.Queue()
         self._recorder = create_default_recorder(self._journal)
+        self._snapshot_fetcher = create_default_snapshot_fetcher()
+        self._snapshot_viewer: SnapshotViewerWindow | None = None
+        self._snapshot_generation = 0
+        self._snapshot_capture_id: str | None = None
+        self._snapshot_capture_time: float | None = None
+        self._snapshot_retry_attempted = False
+        self._log_capture_ids: dict[str, str] = {}
+        self._log_capture_times: dict[str, float] = {}
         self.engine = ProcessingEngine(
             self._events.put,
             journal=self._journal,
@@ -246,6 +455,11 @@ class RoadVisionApp:
         ttk.Label(header, text="Anlık Oturum Kayıtları", style="Section.TLabel").pack(side="left")
         self.log_count_text = tk.StringVar(value="0 kayıt")
         ttk.Button(header, text="Ekranı Temizle", command=self._clear_session_logs).pack(side="right")
+        ttk.Button(
+            header,
+            text="Görüntüyü Aç",
+            command=self._open_selected_snapshot,
+        ).pack(side="right", padx=(0, 8))
         ttk.Label(header, textvariable=self.log_count_text, style="Stat.TLabel").pack(
             side="right", padx=(0, 12)
         )
@@ -255,7 +469,7 @@ class RoadVisionApp:
         table.columnconfigure(0, weight=1)
         table.rowconfigure(0, weight=1)
 
-        columns = ("time", "level", "category", "run", "model", "message", "details")
+        columns = ("time", "capture", "level", "category", "run", "model", "message", "details")
         self.log_tree = ttk.Treeview(
             table,
             columns=columns,
@@ -265,6 +479,7 @@ class RoadVisionApp:
         )
         headings = {
             "time": "Saat",
+            "capture": "📷",
             "level": "Seviye",
             "category": "Kategori",
             "run": "Run",
@@ -274,6 +489,7 @@ class RoadVisionApp:
         }
         widths = {
             "time": (95, False),
+            "capture": (42, False),
             "level": (75, False),
             "category": (85, False),
             "run": (55, False),
@@ -294,12 +510,16 @@ class RoadVisionApp:
         horizontal = ttk.Scrollbar(table, orient="horizontal", command=self.log_tree.xview)
         self.log_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         self.log_tree.grid(row=0, column=0, sticky="nsew")
+        self.log_tree.bind("<Double-1>", self._on_log_double_click)
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
 
         ttk.Label(
             log_panel,
-            text="Bu ekran yalnız mevcut oturumu gösterir; JSONL dosya kaydı arka planda sürer.",
+            text=(
+                "Bu ekran yalnız mevcut oturumu gösterir; 📷 işaretli satırlar "
+                "PostgreSQL'deki tespit görüntüsünü açar."
+            ),
             style="Muted.TLabel",
         ).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
@@ -704,6 +924,7 @@ class RoadVisionApp:
 
     def _poll_events(self) -> None:
         self._poll_log_records()
+        self._poll_snapshot_results()
         latest_frame: EngineEvent | None = None
         try:
             while not self._closed:
@@ -742,11 +963,17 @@ class RoadVisionApp:
     def _append_log_record(self, record: LogRecord) -> None:
         local_time = datetime.fromtimestamp(record.timestamp).astimezone().strftime("%H:%M:%S")
         details = json.dumps(record.payload, ensure_ascii=False, default=str) if record.payload else ""
-        self.log_tree.insert(
+        capture_value = record.payload.get("capture_id") if record.payload else None
+        capture_id = str(capture_value).strip() if capture_value is not None else ""
+        capture_enabled = bool(
+            capture_id and getattr(self, "_snapshot_fetcher", None) is not None
+        )
+        item_id = self.log_tree.insert(
             "",
             "end",
             values=(
                 local_time,
+                "📷" if capture_enabled else "",
                 record.level.value.upper(),
                 record.category.value,
                 record.run_id if record.run_id is not None else "—",
@@ -756,11 +983,18 @@ class RoadVisionApp:
             ),
             tags=(record.level.value,),
         )
+        if capture_enabled:
+            self._log_capture_ids[item_id] = capture_id
+            self._log_capture_times[item_id] = record.timestamp
         self._session_log_count += 1
         if self._session_log_count > MAX_VISIBLE_LOG_ROWS:
             rows = self.log_tree.get_children()
             excess = self._session_log_count - MAX_VISIBLE_LOG_ROWS
-            self.log_tree.delete(*rows[:excess])
+            removed = rows[:excess]
+            self.log_tree.delete(*removed)
+            for removed_id in removed:
+                self._log_capture_ids.pop(removed_id, None)
+                self._log_capture_times.pop(removed_id, None)
             self._session_log_count -= excess
         self.log_count_text.set(f"{self._session_log_count} kayıt")
 
@@ -769,8 +1003,119 @@ class RoadVisionApp:
         rows = self.log_tree.get_children()
         if rows:
             self.log_tree.delete(*rows)
+        self._log_capture_ids.clear()
+        self._log_capture_times.clear()
         self._session_log_count = 0
         self.log_count_text.set("0 kayıt")
+
+    def _on_log_double_click(self, event: tk.Event) -> None:
+        row = self.log_tree.identify_row(event.y)
+        if row:
+            self.log_tree.selection_set(row)
+        self._open_selected_snapshot()
+
+    def _open_selected_snapshot(self) -> None:
+        fetcher = getattr(self, "_snapshot_fetcher", None)
+        if fetcher is None:
+            self.status_text.set(
+                "Tespit görüntüleyici kapalı: ROADVISION_DB_DSN tanımlı değil."
+            )
+            return
+        selected = self.log_tree.selection()
+        if not selected:
+            self.status_text.set("Görüntüsünü açmak için bir günlük satırı seçin.")
+            return
+        item_id = selected[0]
+        capture_id = self._log_capture_ids.get(item_id)
+        if not capture_id:
+            self.status_text.set("Seçili günlük satırında tespit görüntüsü yok.")
+            return
+
+        viewer = self._snapshot_viewer
+        if viewer is None or not viewer.exists():
+            viewer = SnapshotViewerWindow(
+                self.root,
+                on_refresh=self._manual_refresh_snapshot,
+                on_close=self._snapshot_viewer_closed,
+            )
+            self._snapshot_viewer = viewer
+        self._snapshot_capture_id = capture_id
+        self._snapshot_capture_time = self._log_capture_times.get(item_id)
+        self._snapshot_retry_attempted = False
+        viewer.show_loading(capture_id)
+        self._request_snapshot(capture_id)
+
+    def _request_snapshot(self, capture_id: str) -> None:
+        fetcher = getattr(self, "_snapshot_fetcher", None)
+        viewer = getattr(self, "_snapshot_viewer", None)
+        if fetcher is None or viewer is None:
+            return
+        try:
+            self._snapshot_generation = fetcher.request(capture_id)
+        except Exception as exc:
+            viewer.show_error(str(exc))
+
+    def _manual_refresh_snapshot(self, capture_id: str) -> None:
+        if capture_id != self._snapshot_capture_id:
+            return
+        viewer = self._snapshot_viewer
+        if viewer is not None and viewer.exists():
+            viewer.show_loading(capture_id, "Görüntü yeniden yükleniyor…")
+        self._request_snapshot(capture_id)
+
+    def _poll_snapshot_results(self) -> None:
+        fetcher = getattr(self, "_snapshot_fetcher", None)
+        if fetcher is None:
+            return
+        for result in fetcher.drain():
+            if result.generation != self._snapshot_generation:
+                continue
+            viewer = getattr(self, "_snapshot_viewer", None)
+            if viewer is None or not viewer.exists():
+                continue
+            if result.status == "ok" and result.bundle is not None:
+                viewer.show_bundle(result.bundle)
+            elif result.status == "not_found":
+                message = (
+                    "Görüntü henüz yazılmamış veya saklama süresi dolduğu için "
+                    "silinmiş olabilir."
+                )
+                viewer.show_not_found(message)
+                capture_time = self._snapshot_capture_time
+                is_recent = (
+                    capture_time is not None
+                    and 0.0 <= time.time() - capture_time <= 15.0
+                )
+                if is_recent and not self._snapshot_retry_attempted:
+                    self._snapshot_retry_attempted = True
+                    viewer.status_text.set(
+                        "Kayıt arka planda sürüyor olabilir; 1,5 saniye sonra "
+                        "bir kez yeniden denenecek."
+                    )
+                    self.root.after(
+                        1500,
+                        lambda capture_id=result.capture_id, generation=result.generation: (
+                            self._auto_retry_snapshot(capture_id, generation)
+                        ),
+                    )
+            else:
+                viewer.show_error(result.message or "Bilinmeyen veritabanı hatası")
+
+    def _auto_retry_snapshot(self, capture_id: str, generation: int) -> None:
+        if (
+            capture_id != self._snapshot_capture_id
+            or generation != self._snapshot_generation
+        ):
+            return
+        viewer = self._snapshot_viewer
+        if viewer is None or not viewer.exists():
+            return
+        viewer.show_loading(capture_id, "Arka plan kaydı yeniden kontrol ediliyor…")
+        self._request_snapshot(capture_id)
+
+    def _snapshot_viewer_closed(self, viewer: SnapshotViewerWindow) -> None:
+        if viewer is self._snapshot_viewer:
+            self._snapshot_viewer = None
 
     def _event_belongs_to_active_run(self, event: EngineEvent) -> bool:
         return self._active_run_id is not None and event.run_id == self._active_run_id
@@ -779,6 +1124,9 @@ class RoadVisionApp:
         if event.kind == "shutdown_complete":
             if self._closing and not self._closed:
                 self._closed = True
+                fetcher = getattr(self, "_snapshot_fetcher", None)
+                if fetcher is not None:
+                    fetcher.close(timeout=0.25)
                 self._journal.release_journal()
                 self.root.destroy()
             return
@@ -836,6 +1184,12 @@ class RoadVisionApp:
         if self._closing or self._closed:
             return
         self._closing = True
+        fetcher = getattr(self, "_snapshot_fetcher", None)
+        if fetcher is not None:
+            fetcher.close(timeout=0.0)
+        viewer = getattr(self, "_snapshot_viewer", None)
+        if viewer is not None and viewer.exists():
+            viewer.close()
         self._active_run_id = None
         self._discard_pending_events()
         self.start_button.configure(text="Başlat", style="Accent.TButton", state="disabled")

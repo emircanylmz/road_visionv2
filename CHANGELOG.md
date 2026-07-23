@@ -2,6 +2,33 @@
 
 ## [Yayımlanmadı]
 
+## [1.2.0] - 2026-07-23
+
+### Eklendi
+
+- Oturum Günlüğü'nde görüntüsü bulunan tespitleri gösteren dar 📷 sütunu.
+- Satıra çift tıklama veya **Görüntüyü Aç** düğmesiyle açılan, işaretli ve
+  orijinal JPEG arasında geçiş yapabilen tekil görüntüleyici pencere.
+- Salt-okunur, tek worker thread'li `SnapshotFetcher`, nesil tabanlı bayat
+  sonuç filtresi ve 16 capture'lık LRU önbellek.
+- Capture blob ve model özetlerini tek UUID üzerinden okuyan `fetch_capture`
+  DB API'si.
+- Henüz yazılmamış yeni capture için bir defalık gecikmeli yenileme ve
+  görüntüyü diske kaydetme desteği.
+
+### Değiştirildi
+
+- NumPy, OpenCV, Pillow, PyTorch ve Ultralytics bağımlılıklarına uyumlu alt/üst
+  sürüm sınırları eklendi.
+- `.pt` model ağırlıkları ve kaynak `.zip` paketi Git LFS yönetimine taşındı.
+
+### Doğrulama
+
+- Temiz Python 3.11 sanal ortamında `pip check` hatasız tamamlandı.
+- 136 otomatik test geçti.
+- Semantic model iki farklı güven eşiğiyle gerçek ağırlık üzerinde çalıştırıldı.
+- Git LFS pull sonrasında bütün `SHA256SUMS.txt` kayıtları doğrulandı.
+
 ## [1.1.0] - 2026-07-23
 
 ### Eklendi

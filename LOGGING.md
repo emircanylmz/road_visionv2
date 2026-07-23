@@ -68,6 +68,26 @@ Tablo saat, seviye, kategori, run, model, mesaj ve payload ayrıntılarını gö
 
 `SessionLogSink` son 2.000 bekleyen kaydı tutar. UI tablosu son 1.000 satırla sınırlıdır. Kuyruk dolarsa en eski UI kaydı atılarak en yeni olayların görünür kalması sağlanır.
 
+### Tespit görüntüsünü açma
+
+Payload'ında `capture_id` bulunan tespit satırları dar **📷** sütununda
+işaretlenir. Satıra çift tıklamak veya satırı seçip **Görüntüyü Aç**
+düğmesine basmak PostgreSQL'deki işaretli ve orijinal JPEG çiftini tek bir
+görüntüleyici penceresinde açar. Penceredeki **Yenile** bağlantıyı tekrar
+dener; **Diske Kaydet** yalnız o anda seçili olan görünümü
+`CAPTURE_UUID-annotated.jpg` veya `CAPTURE_UUID-original.jpg` düzeniyle
+kaydeder.
+
+Okuma ayrı bir worker thread'de yapılır; Tk ana thread'i PostgreSQL'i
+beklemez. Hızlı ardışık seçimlerde yalnız son isteğin sonucu uygulanır ve son
+16 capture bellek içi LRU önbellekte tutulur. Recorder henüz yazmayı
+bitirmediyse son 15 saniyelik bir satır 1,5 saniye sonra bir kez otomatik
+yeniden denenir.
+
+`ROADVISION_DB_DSN` tanımlı değilse görüntüleyici kurulmaz. 📷 sütunu boş
+kalır ve açma girişimi yalnız durum çubuğunda bilgi verir; JSONL günlük ve
+uygulamanın diğer işlevleri etkilenmez.
+
 ## Tespit tekrarlarının bastırılması
 
 Her model ve çalışma için varsayılan imza, tekil nesneler varsa sınıf-başına

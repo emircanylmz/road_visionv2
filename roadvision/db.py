@@ -31,6 +31,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -214,6 +215,78 @@ class MediaPruneResult:
     blobs_deleted: int
     bytes_before: int
     bytes_after: int
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureMedia:
+    data: bytes
+    width: int
+    height: int
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureBundle:
+    capture_id: str
+    ts: datetime
+    source_name: str | None
+    source_kind: str | None
+    frame_sequence: int | None
+    is_reprocess: bool
+    original: CaptureMedia
+    annotated: CaptureMedia
+    models: tuple[tuple[str, int, Any], ...]
+
+
+def fetch_capture(conn: Any, capture_id: str) -> CaptureBundle | None:
+    """Bir capture'ın iki görüntüsünü ve model özetlerini tek PK bakışıyla okur.
+
+    Transaction yaşam döngüsü çağırana aittir. Bu işlev commit/rollback
+    yapmadığından sahte bağlantıyla ve salt-okunur worker bağlantısıyla
+    kullanılabilir.
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.ts, c.source_name, c.source_kind, c.frame_sequence,
+                   c.is_reprocess,
+                   o.data, o.width, o.height,
+                   a.data, a.width, a.height
+            FROM media_captures c
+            JOIN media_blobs o ON o.id = c.original_media_id
+            JOIN media_blobs a ON a.id = c.annotated_media_id
+            WHERE c.capture_id = %s::uuid
+            """,
+            (str(capture_id),),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cur.execute(
+            """
+            SELECT model_id, object_count, signature
+            FROM media_capture_models
+            WHERE capture_id = %s::uuid
+            ORDER BY model_id
+            """,
+            (str(capture_id),),
+        )
+        models = tuple(
+            (str(model_id), int(object_count), signature)
+            for model_id, object_count, signature in cur.fetchall()
+        )
+
+    return CaptureBundle(
+        capture_id=str(capture_id),
+        ts=row[0],
+        source_name=row[1],
+        source_kind=row[2],
+        frame_sequence=row[3],
+        is_reprocess=bool(row[4]),
+        original=CaptureMedia(data=bytes(row[5]), width=int(row[6]), height=int(row[7])),
+        annotated=CaptureMedia(data=bytes(row[8]), width=int(row[9]), height=int(row[10])),
+        models=models,
+    )
 
 
 def prune_media(
