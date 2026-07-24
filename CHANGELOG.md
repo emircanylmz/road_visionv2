@@ -2,6 +2,34 @@
 
 ## [Yayımlanmadı]
 
+## [1.2.1] - 2026-07-24
+
+### Eklendi
+
+- Dört aktif model ve 20 bilinen tespit türü için referans katalogları.
+- Bilinmeyen model/sınıfları kaybetmeden genişleyen `detection_types`
+  çalışma zamanı sözlüğü.
+- Model/tür envanteri, zaman sayımları ve katalog dışı türler için hazır
+  PostgreSQL görünümleri.
+- Transaction/advisory-lock korumalı bağımsız DB şema 3 migration ve v1.2.0
+  uyumluluk geri dönüş dosyası.
+
+### Değiştirildi
+
+- PostgreSQL şema sürümü 3'e yükseltildi; `detected_objects.type_id`,
+  `(type_id, ts)` indeksi ve metin alanlarıyla tutarlılığı zorlayan birleşik
+  yabancı anahtar eklendi.
+- DB şema 3 migration kayıpsız ve eklemeli yapıldı; mevcut `confidence`, `bbox`,
+  `area_ratio`, `model_id` ve `class_name` değerleri yerinde korunuyor.
+
+### Doğrulama
+
+- 138 otomatik test geçti.
+- Temiz kurulum, v2→v3 migration, tekrar çalıştırma ve uyumluluk geri dönüşü
+  PostgreSQL 17 üzerinde doğrulandı.
+- Canlı Docker veritabanındaki 40 tespit satırının migration öncesi/sonrası
+  veri parmak izi aynı kaldı.
+
 ## [1.2.0] - 2026-07-23
 
 ### Eklendi

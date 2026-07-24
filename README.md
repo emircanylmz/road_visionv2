@@ -1,9 +1,9 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.2.0 — 23 Temmuz 2026
+**Kararlı sürüm:** v1.2.1 — 24 Temmuz 2026
 
 İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), bu sürümün
-özeti için [VERSION_1_2.md](VERSION_1_2.md), tüm değişiklikler için
+özeti için [VERSION_1_2_1.md](VERSION_1_2_1.md), tüm değişiklikler için
 [CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı
 [LOGGING.md](LOGGING.md), PostgreSQL ve medya kaydı [DATABASE.md](DATABASE.md)
 belgelerinde açıklanır.
@@ -155,7 +155,7 @@ için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) dosyasına bakın.
 ## Sürüm geçmişi ve geri dönüş
 
 Kararlı sürümler Git etiketleriyle korunur. Güncel geliştirme `main`
-dalındadır; `v1.2.0`, `v1.1.0`, `v1.0.1` ve `v1.0.0` sürümleri kendi
+dalındadır; `v1.2.1`, `v1.2.0`, `v1.1.0`, `v1.0.1` ve `v1.0.0` sürümleri kendi
 etiketlerinden açılabilir.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:

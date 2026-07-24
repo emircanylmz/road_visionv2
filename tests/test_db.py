@@ -156,6 +156,10 @@ class WriteBatchTests(unittest.TestCase):
         self.assertEqual(len(table_rows(conn, "detection_events")), 1)
         objects = table_rows(conn, "detected_objects")
         self.assertEqual(len(objects), 2)
+        # V3 trigger'ı legacy model/sınıf INSERT'inden type_id üretir; bu
+        # parametre düzeni v2 uyumluluk geri dönüşünde de çalışmaya devam eder.
+        self.assertIn("model_id, class_name", objects[0][0])
+        self.assertNotIn("type_id", objects[0][0])
         # tür + doğruluk + zaman satırda mevcut
         event_id, ts, run_id, model_id, class_name, confidence, bbox, area = objects[0][1]
         self.assertEqual(class_name, "pothole")

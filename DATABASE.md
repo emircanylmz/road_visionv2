@@ -23,9 +23,10 @@ python3 -m pip install -r requirements-db.txt
 ./scripts/run_with_db.sh
 ```
 
-İlk volume oluşturulurken `db/schema.sql` otomatik uygulanır. RoadVision
-da sürüm-kapılı, transaction/advisory-lock korumalı migration kontrolünü
-her yeni bağlantıda çalıştırır. Veriler
+İlk volume oluşturulurken önce `db/schema.sql`, ardından
+`db/roadvision_schema_v1_2_1.sql` otomatik uygulanır. RoadVision da
+sürüm-kapılı, transaction/advisory-lock korumalı migration kontrolünü her
+yeni bağlantıda çalıştırır. Veriler
 `roadvision_postgres_data` adlı Docker volume'ünde kalıcıdır.
 
 Container'ı durdurmak için:
@@ -42,7 +43,17 @@ export ROADVISION_DB_DSN="postgresql://kullanici:parola@sunucu:5432/roadvision"
 python3 app.py
 ```
 
-Şema ilk bağlantıda otomatik uygulanır (`CREATE TABLE IF NOT EXISTS`); elle kurmak isterseniz `db/schema.sql` dosyasını `psql` ile çalıştırın. psycopg kurulu değilse veya DSN hatalıysa uygulama uyarı basıp DB'siz devam eder — JSONL kaydı her koşulda sürer.
+Şema ilk bağlantıda otomatik uygulanır. Elle temiz kurulum yapmak isterseniz
+önce v1/v2 çekirdeğini, sonra v3 migration'ını çalıştırın:
+
+```bash
+psql "$ROADVISION_DB_DSN" -v ON_ERROR_STOP=1 -f db/schema.sql
+psql "$ROADVISION_DB_DSN" -v ON_ERROR_STOP=1 \
+  -f db/roadvision_schema_v1_2_1.sql
+```
+
+psycopg kurulu değilse veya DSN hatalıysa uygulama uyarı basıp DB'siz devam
+eder — JSONL kaydı her koşulda sürer.
 
 ## Günlük veri modeli
 
@@ -54,22 +65,84 @@ python3 app.py
 Görüntü alınan değişim olaylarında `capture_id`, medya tablolarıyla
 korelasyonu taşır; görüntü kuyruğu doluysa veya kapı reddederse NULL'dır.
 
-**`detected_objects` — tekil tespitler, türe göre sorgulanabilir.** Olaydaki her nesne ayrı satır: **`class_name` (tür), `confidence` (doğruluk), `ts` (tarih-saat)**, `bbox REAL[]` (xyxy piksel), semantic için `area_ratio`. Semantic maskede güven skoru olmadığından `confidence` NULL'dır. Tür ve model bazlı indeksler hazır:
+**`roadvision_model_catalog` ve `roadvision_detection_type_catalog` —
+tanımlı envanter.** Dört aktif modelin kimliği/görevi/girdi boyutu ve
+beklenen 20 tespit türü burada tutulur. Bu iki tablo, çalışma zamanında
+görülen bilinmeyen türlerden etkilenmeyen referans katalogdur.
+
+**`detection_types` — çalışma zamanı tür sözlüğü.** Her `(model_id,
+class_name)` çifti bir `type_id` alır. Referans katalogdaki 20 tür
+`is_catalogued=true`; yeni veya eski veriden gelen bilinmeyen bir sınıf
+`is_catalogued=false` olarak otomatik eklenir ve veri kaybolmaz.
+
+**`detected_objects` — tekil tespit fact tablosu.** Olaydaki her nesne ayrı
+satırdır: `type_id`, `confidence`, `ts`, `bbox REAL[]` (xyxy piksel) ve
+semantic modeller için `area_ratio`. Semantic maskede güven skoru
+olmadığından `confidence` NULL'dır. V3 migration güvenli geri dönüş ve audit
+için eski `model_id/class_name` kolonlarını da korur; birleşik yabancı anahtar
+bu metinlerin `type_id` ile çelişmesine izin vermez. Yeni sorgular sözlük
+üzerinden çalışır:
 
 ```sql
 -- Türe göre son 24 saatin tespitleri ve ortalama doğruluk
-SELECT class_name, count(*) AS adet, round(avg(confidence)::numeric, 3) AS ort_dogruluk
-FROM detected_objects
-WHERE ts > now() - interval '24 hours'
-GROUP BY class_name ORDER BY adet DESC;
+SELECT t.model_id, t.class_name, count(*) AS adet,
+       round(avg(o.confidence)::numeric, 3) AS ort_dogruluk
+FROM detected_objects o
+JOIN detection_types t ON t.type_id = o.type_id
+WHERE o.ts > now() - interval '24 hours'
+GROUP BY t.model_id, t.class_name
+ORDER BY adet DESC;
 
 -- Belirli türün zaman içindeki dağılımı
-SELECT date_trunc('hour', ts) AS saat, count(*)
-FROM detected_objects WHERE class_name = 'pothole'
+SELECT date_trunc('hour', o.ts) AS saat, count(*)
+FROM detected_objects o
+JOIN detection_types t ON t.type_id = o.type_id
+WHERE t.model_id = 'pothole' AND t.class_name = 'pothole'
 GROUP BY 1 ORDER BY 1;
 ```
 
-`detected_objects.ts/run_id/model_id` bilinçli olarak denormalize edildi: türe göre analitik sorgular join'siz çalışır. Hacim büyürse (`ts` üzerinden aylık) partitioning eklenebilir; şema buna hazırdır.
+Hazır görünümler:
+
+- `vw_detected_objects_flat`: v2'nin dokuz sütunlu okuma sözleşmesi
+- `vw_roadvision_model_inventory`: model başına beklenen/gerçek tür sayısı
+- `vw_roadvision_detection_type_counts`: toplam, 24 saat ve 7 gün sayımları
+- `vw_roadvision_daily_detection_counts`: günlük model/tür özeti
+- `vw_roadvision_unknown_detection_types`: katalog bakım kuyruğu
+- `vw_roadvision_capture_summary`: capture, model ve JPEG boyut özeti
+
+`(type_id, ts)` indeksi tür/zaman sorgularını, `event_id` indeksi olay
+join'lerini destekler. Hacim milyonlarca satıra çıktığında günlük özet için
+artımlı rollup ve zaman partitioning ayrı migration olarak değerlendirilebilir.
+
+## V2 → V3 güvenli yükseltme
+
+Uygulama ilk v3 bağlantısında migration'ı otomatik yapar. Docker veritabanını
+elle yükseltmeden önce çalışan RoadVision süreçlerini kapatın ve yedek alın:
+
+```bash
+mkdir -p backups
+docker compose exec -T postgres sh -lc \
+  'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+  > backups/roadvision-before-v3.dump
+
+docker compose exec -T postgres sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < db/roadvision_schema_v1_2_1.sql
+```
+
+Migration tek transaction ve advisory lock altında çalışır. Katalog,
+backfill veya FK doğrulaması başarısız olursa `schema_info=3` dahil bütün
+değişiklikler geri alınır. V3 eklemeli olduğu için acil uygulama geri dönüşü
+veri taşımadan yapılabilir:
+
+```bash
+docker compose exec -T postgres sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < db/roadvision_schema_v1_2_1_compat_rollback.sql
+```
+
+Bu uyumluluk geri dönüşü yeni tablo/kolonları silmez; yalnız v1.2
+uygulamasının sürüm kapısını yeniden açar.
 
 ## Görüntü veri modeli
 

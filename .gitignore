@@ -222,3 +222,6 @@ __marimo__/
 
 # RoadVision medya dışa aktarımları
 exports/
+
+# Yerel PostgreSQL yedekleri (veri/kimlik bilgisi içerebilir)
+backups/

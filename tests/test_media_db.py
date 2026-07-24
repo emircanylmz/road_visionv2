@@ -8,6 +8,7 @@ from unittest.mock import call, patch
 from roadvision.db import (
     MEDIA_ADVISORY_LOCK,
     SCHEMA_ADVISORY_LOCK,
+    SCHEMA_V3_SQL,
     SCHEMA_VERSION,
     ensure_schema,
     write_batch,
@@ -376,22 +377,46 @@ class DbMediaSinkTests(unittest.TestCase):
 
 
 class EnsureSchemaMigrationTests(unittest.TestCase):
-    def test_v1_database_runs_only_v2_migration(self) -> None:
+    def test_v3_migration_is_additive_and_keeps_legacy_insert_compatible(self) -> None:
+        normalized = normalize_sql(SCHEMA_V3_SQL)
+
+        self.assertIn("ADD COLUMN IF NOT EXISTS type_id INTEGER", normalized)
+        self.assertIn(
+            "FOREIGN KEY (type_id, model_id, class_name)",
+            normalized,
+        )
+        self.assertIn(
+            "CREATE TRIGGER trg_fill_detected_object_type_id",
+            normalized,
+        )
+        self.assertNotIn("DROP COLUMN", normalized)
+
+    def test_v1_database_runs_v2_and_v3_migrations(self) -> None:
         conn = MigrationConnection({1})
 
         ensure_schema(conn)
 
-        self.assertEqual(conn.versions, {1, 2})
+        self.assertEqual(conn.versions, {1, 2, 3})
         self.assertEqual((conn.commits, conn.rollbacks), (1, 0))
-        migrations = [
+        media_migrations = [
             sql
             for sql, _ in conn.statements
             if "CREATE TABLE IF NOT EXISTS media_blobs" in sql
         ]
-        self.assertEqual(len(migrations), 1)
+        type_migrations = [
+            sql
+            for sql, _ in conn.statements
+            if "CREATE TABLE IF NOT EXISTS detection_types" in sql
+        ]
+        self.assertEqual(len(media_migrations), 1)
+        self.assertEqual(len(type_migrations), 1)
         self.assertIn(
             "ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS capture_id UUID",
-            migrations[0],
+            media_migrations[0],
+        )
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS type_id INTEGER",
+            type_migrations[0],
         )
         self.assertFalse(
             any(
@@ -408,17 +433,40 @@ class EnsureSchemaMigrationTests(unittest.TestCase):
             )
         )
 
-    def test_current_schema_does_not_rerun_migrations(self) -> None:
+    def test_v2_database_runs_only_v3_migration(self) -> None:
         conn = MigrationConnection({1, 2})
 
         ensure_schema(conn)
 
-        self.assertEqual(conn.versions, {1, 2})
+        self.assertEqual(conn.versions, {1, 2, 3})
+        self.assertEqual((conn.commits, conn.rollbacks), (1, 0))
+        self.assertEqual(
+            sum(
+                "CREATE TABLE IF NOT EXISTS detection_types" in sql
+                for sql, _ in conn.statements
+            ),
+            1,
+        )
+        self.assertFalse(
+            any(
+                "CREATE TABLE IF NOT EXISTS media_blobs" in sql
+                or "CREATE TABLE IF NOT EXISTS log_records" in sql
+                for sql, _ in conn.statements
+            )
+        )
+
+    def test_current_schema_does_not_rerun_migrations(self) -> None:
+        conn = MigrationConnection({1, 2, 3})
+
+        ensure_schema(conn)
+
+        self.assertEqual(conn.versions, {1, 2, 3})
         self.assertEqual((conn.commits, conn.rollbacks), (1, 0))
         self.assertFalse(
             any(
                 "CREATE TABLE IF NOT EXISTS media_blobs" in sql
                 or "CREATE TABLE IF NOT EXISTS log_records" in sql
+                or "CREATE TABLE IF NOT EXISTS detection_types" in sql
                 for sql, _ in conn.statements
             )
         )

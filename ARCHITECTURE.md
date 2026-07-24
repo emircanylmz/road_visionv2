@@ -95,7 +95,11 @@ Engine'e opsiyonel `EventJournal`, `MediaRecorder` ve `SnapshotGate` enjekte edi
 - `JsonlFileSink`: satır başına JSON yazar ve boyuta göre dosya döndürür.
 - `ConsoleSink`: uyarı ve hataları stderr'e taşır.
 - `SessionLogSink`: yazıcı thread'inden gelen kayıtları Tk ana thread'inin tüketebileceği sınırlı kuyruğa aktarır.
-- `PostgresSink`: günlükleri ayrı sınırlı kuyruk ve flusher thread'iyle `log_records`, `detection_events` ve `detected_objects` tablolarına açar.
+- `PostgresSink`: günlükleri ayrı sınırlı kuyruk ve flusher thread'iyle
+  `log_records`, `detection_events` ve `detected_objects` tablolarına açar.
+  Şema v3'te tekil tespitler ortak fact tablosunda kalır; model/sınıf kimliği
+  `detection_types.type_id` sözlüğüne bağlanır. Eski metin kolonları güvenli
+  rollback için birleşik FK korumasıyla geçici olarak tutulur.
 
 ### `EventJournal`
 

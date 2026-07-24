@@ -11,6 +11,7 @@ services:
     volumes:
       - roadvision_postgres_data:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/001-roadvision-schema.sql:ro
+      - ./db/roadvision_schema_v1_2_1.sql:/docker-entrypoint-initdb.d/002-roadvision-schema-v3.sql:ro
     healthcheck:
       test:
         - CMD-SHELL
