@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import time
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -9,6 +11,49 @@ from ultralytics import YOLO
 
 from .base import ModelAdapter, ModelRunStat
 from .detections import extract_objects
+
+# `git lfs pull` çalıştırılmamış klonlarda `.pt` dosyaları gerçek ağırlık
+# yerine bu başlıkla başlayan küçük metin işaretçileridir.
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
+
+
+def verify_weights_file(spec: Any) -> None:
+    """Ağırlık dosyasını YOLO'ya (dolayısıyla pickle'a) vermeden önce doğrular.
+
+    `.pt` yüklemek keyfi kod çalıştırabildiğinden, katalogda `sha256` alanı
+    tanımlıysa dosyanın özeti yüklemeden ÖNCE karşılaştırılır. Özet yoksa
+    yalnız dosyanın varlığı ve Git LFS işaretçisi olmadığı kontrol edilir;
+    böylece `git lfs pull` unutulduğunda kafa karıştırıcı bir torch hatası
+    yerine net bir yönlendirme verilir.
+    """
+
+    path = Path(spec.weights)
+    if not path.is_file():
+        raise RuntimeError(f"Model ağırlık dosyası bulunamadı: {path}")
+
+    expected = getattr(spec, "sha256", None)
+    hasher = hashlib.sha256()
+    with path.open("rb") as stream:
+        head = stream.read(len(_LFS_POINTER_PREFIX))
+        if head.startswith(_LFS_POINTER_PREFIX):
+            raise RuntimeError(
+                f"{path.name} bir Git LFS işaretçisi; gerçek model ağırlığı "
+                "indirilmemiş. Depo kökünde 'git lfs install && git lfs pull' "
+                "çalıştırın."
+            )
+        if not expected:
+            return
+        hasher.update(head)
+        while chunk := stream.read(1024 * 1024):
+            hasher.update(chunk)
+    digest = hasher.hexdigest()
+    if digest != expected:
+        raise RuntimeError(
+            f"{path.name} SHA-256 doğrulaması başarısız (beklenen "
+            f"{expected[:12]}…, hesaplanan {digest[:12]}…). Dosya bozulmuş "
+            "veya değiştirilmiş olabilir; katalogdaki özeti ve ağırlık "
+            "dosyasını kontrol edin."
+        )
 
 
 class YoloModelAdapter(ModelAdapter):
@@ -19,6 +64,7 @@ class YoloModelAdapter(ModelAdapter):
 
     def prepare_model(self) -> None:
         if self._model is None:
+            verify_weights_file(self.spec)
             self._model = YOLO(str(self.spec.weights), task=self.spec.task)
 
     def predict(self, frame: np.ndarray) -> Any:

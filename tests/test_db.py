@@ -68,6 +68,9 @@ class FakeCursor:
     def fetchone(self):
         return self._last_returning
 
+    def close(self) -> None:
+        return None
+
 
 class FakeConnection:
     def __init__(self) -> None:
@@ -103,6 +106,29 @@ class FakeConnection:
 
     def close(self) -> None:
         self.closed = True
+
+
+class PipelineFakeConnection(FakeConnection):
+    """`conn.pipeline()` sunan bağlantı; write_batch'i pipeline yoluna sokar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pipeline_entries = 0
+        self.pipeline_exits = 0
+
+    def pipeline(self):
+        conn = self
+
+        class _Pipeline:
+            def __enter__(self_inner) -> "_Pipeline":
+                conn.pipeline_entries += 1
+                return self_inner
+
+            def __exit__(self_inner, *exc) -> None:
+                conn.pipeline_exits += 1
+                return None
+
+        return _Pipeline()
 
 
 def app_record(message: str = "olay") -> LogRecord:
@@ -186,6 +212,33 @@ class WriteBatchTests(unittest.TestCase):
         self.assertEqual(first_inserted, 1)
         self.assertEqual(second_inserted, 0)
         self.assertEqual(len(table_rows(conn, "detected_objects")), objects_before)
+
+    def test_pipeline_connection_matches_sequential_semantics(self) -> None:
+        """psycopg pipeline yolunun sıralı yolla aynı sonucu ürettiğini doğrular."""
+
+        conn = PipelineFakeConnection()
+        records = [
+            (app_record("bir"), "key-app-1"),
+            (detection_record(), "key-det-1"),
+            (app_record("iki"), "key-app-1"),  # aynı batch içinde yinelenen anahtar
+        ]
+
+        inserted = write_batch(conn, records)
+
+        self.assertEqual(inserted, 2)
+        self.assertEqual(conn.pipeline_entries, 1)
+        self.assertEqual(conn.pipeline_exits, 1)
+        self.assertEqual(conn.commits, 1)
+        # Fake, çakışan denemeler dahil her INSERT statement'ını kaydeder;
+        # üç log_records denemesinin yalnız ikisi gerçekten eklendi (inserted).
+        self.assertEqual(len(table_rows(conn, "log_records")), 3)
+        self.assertEqual(len(table_rows(conn, "detection_events")), 1)
+        self.assertEqual(len(table_rows(conn, "detected_objects")), 2)
+
+        # Idempotency pipeline yolunda da korunur.
+        self.assertEqual(write_batch(conn, records), 0)
+        self.assertEqual(len(table_rows(conn, "detected_objects")), 2)
+        self.assertEqual(conn.pipeline_entries, 2)
 
 
 class PostgresSinkTests(unittest.TestCase):

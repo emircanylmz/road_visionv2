@@ -36,6 +36,35 @@ def select_device() -> str:
     return "cpu"
 
 
+# torchvision'ın MPS üzerinde yerel (fallback'siz) ve doğru sonuç veren NMS
+# çekirdeğini taşıdığı bilinen en düşük sürüm. Daha eski sürümlerde
+# PYTORCH_ENABLE_MPS_FALLBACK yolu bazı kombinasyonlarda kutu koordinatlarını
+# bozabildiğinden (x2, x1'e kayıyor) detect görevleri CPU'da tutulur.
+_MPS_NMS_MIN_TORCHVISION = (0, 20)
+
+
+def mps_detect_supported() -> bool:
+    """Detect/segment görevlerinin MPS üzerinde güvenle çalışıp çalışmayacağı.
+
+    Karar kurulu torchvision sürümüne göre verilir; torchvision yoksa veya
+    sürüm çözümlenemiyorsa muhafazakâr davranıp False döner. Yanlış pozitif
+    ihtimaline karşı `YoloModelAdapter.predict` içindeki çalışma zamanı CPU
+    fallback'i güvenlik ağı olarak durur.
+    """
+
+    try:
+        import torchvision
+    except Exception:
+        return False
+    version = getattr(torchvision, "__version__", "")
+    parts = version.split("+", 1)[0].split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        return False
+    return (major, minor) >= _MPS_NMS_MIN_TORCHVISION
+
+
 class ModelManager:
     """Owns lazy-loaded model adapters. Called from one inference worker."""
 
@@ -52,6 +81,11 @@ class ModelManager:
         self.confidence = confidence
         self.performance_profile = performance_profile
         self.status_callback = status_callback
+        # CPU/CUDA oturumlarında torchvision'ı yalnız sürüm kapısı için
+        # yüklemek gereksiz başlangıç maliyeti ve yan etki oluşturur.
+        self._mps_detect_supported = (
+            self.device == "mps" and mps_detect_supported()
+        )
         self._models: dict[str, YoloModelAdapter] = {}
         self._lock = threading.RLock()
         self._model_confidences = {
@@ -94,16 +128,23 @@ class ModelManager:
             return adapter
 
     def _device_for_spec(self, spec) -> str:
-        # torchvision NMS'in MPS fallback yolu bazı macOS torch/torchvision
-        # kombinasyonlarında kutu koordinatlarını bozabiliyor (x2, x1'e kayıyor).
-        # NMS kullanan görevleri CPU'da çalıştırmak doğru xyxy sonucunu garanti eder.
-        if self.device == "mps" and spec.task in {"detect", "segment", "obb", "pose"}:
+        # torchvision NMS'in MPS fallback yolu eski torch/torchvision
+        # kombinasyonlarında kutu koordinatlarını bozabiliyor (x2, x1'e
+        # kayıyor). Yerel MPS NMS çekirdeği taşıyan sürümlerde detect
+        # görevleri MPS'te kalır; daha eskisinde CPU doğru xyxy'yi garanti eder.
+        if (
+            self.device == "mps"
+            and not self._mps_detect_supported
+            and spec.task in {"detect", "segment", "obb", "pose"}
+        ):
             return "cpu"
         return self.device
 
     @property
     def device_label(self) -> str:
-        return "mps + cpu(det)" if self.device == "mps" else self.device
+        if self.device == "mps" and not self._mps_detect_supported:
+            return "mps + cpu(det)"
+        return self.device
 
     def prepare_models(self, model_ids: frozenset[str]) -> None:
         self.registry.validate_models(model_ids)
@@ -146,7 +187,7 @@ class ModelManager:
             self._configure_cpu_threads(len(adapters))
             futures = [self._executor.submit(self._predict_timed, adapter, frame) for adapter in adapters]
             predictions = [future.result() for future in futures]
-            for adapter, (prediction, elapsed_ms) in zip(adapters, predictions):
+            for adapter, (prediction, elapsed_ms) in zip(adapters, predictions, strict=True):
                 canvas, capture_canvas, count = self._render_or_count(
                     canvas,
                     capture_canvas,

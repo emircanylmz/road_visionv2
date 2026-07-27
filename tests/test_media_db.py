@@ -237,6 +237,47 @@ def statements_for(statements: list[tuple[str, object]], table: str) -> list[tup
 
 
 class DbMediaSinkTests(unittest.TestCase):
+    def test_prune_is_throttled_by_interval(self) -> None:
+        conn = MediaConnection()
+        clock_value = [1_000.0]
+        sink = DbMediaSink(
+            "postgresql://fake",
+            connection_factory=lambda _dsn: conn,
+            max_attempts=1,
+            prune_interval_s=60.0,
+            clock=lambda: clock_value[0],
+        )
+
+        with (
+            patch("roadvision.media.ensure_schema"),
+            patch("roadvision.media.prune_media") as prune,
+        ):
+            sink.store(
+                encoded_image(b"a-raw"),
+                encoded_image(b"a-marked"),
+                two_model_snapshot("035de335-28d6-4c31-9d7d-54fc6ca076f1"),
+            )
+            self.assertEqual(prune.call_count, 1)  # ilk yazım kotayı hemen uygular
+
+            clock_value[0] += 10.0
+            sink.store(
+                encoded_image(b"b-raw"),
+                encoded_image(b"b-marked"),
+                two_model_snapshot("035de335-28d6-4c31-9d7d-54fc6ca076f2"),
+            )
+            self.assertEqual(prune.call_count, 1)  # aralık dolmadı; temizlik atlandı
+
+            clock_value[0] += 60.0
+            sink.store(
+                encoded_image(b"c-raw"),
+                encoded_image(b"c-marked"),
+                two_model_snapshot("035de335-28d6-4c31-9d7d-54fc6ca076f3"),
+            )
+            self.assertEqual(prune.call_count, 2)
+
+        # Temizlik atlansa bile yakalamaların tamamı yazıldı.
+        self.assertEqual(len(conn.captures), 3)
+
     def test_store_is_idempotent_for_one_capture_with_two_models(self) -> None:
         conn = MediaConnection()
         original = encoded_image(b"original-jpeg")

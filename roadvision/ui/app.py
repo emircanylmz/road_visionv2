@@ -20,7 +20,6 @@ from ..db import CaptureBundle, CaptureMedia
 from ..engine import EngineEvent, EngineState, ProcessingEngine
 from ..logbook import EventJournal, LogLevel, LogRecord, SessionLogSink, create_default_journal
 from ..media import (
-    SnapshotFetchResult,
     create_default_recorder,
     create_default_snapshot_fetcher,
 )
@@ -1268,10 +1267,23 @@ class RoadVisionApp:
     def _display_frame(self, frame) -> None:
         width = max(320, self.preview.winfo_width())
         height = max(240, self.preview.winfo_height())
+        # Kare Tk ana thread'inde 20-30 FPS ile çizildiğinden maliyet önemli:
+        # renk dönüşümü ve PIL kopyasından ÖNCE cv2 ile önizleme boyutuna
+        # küçült; tam çözünürlükte LANCZOS her karede gereksiz CPU harcıyordu.
+        # thumbnail gibi oran korunur ve asla büyütme yapılmaz.
+        frame_height, frame_width = frame.shape[:2]
+        scale = min(width / frame_width, height / frame_height, 1.0)
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame,
+                (
+                    max(1, round(frame_width * scale)),
+                    max(1, round(frame_height * scale)),
+                ),
+                interpolation=cv2.INTER_AREA,
+            )
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb)
-        image.thumbnail((width, height), Image.Resampling.LANCZOS)
-        self._photo = ImageTk.PhotoImage(image=image)
+        self._photo = ImageTk.PhotoImage(image=Image.fromarray(rgb))
         self.preview.configure(image=self._photo, text="")
 
     def _on_preview_resize(self, _: tk.Event) -> None:

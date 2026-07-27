@@ -2,6 +2,48 @@
 
 ## [Yayımlanmadı]
 
+### Eklendi
+
+- `models.json` kataloğuna isteğe bağlı `sha256` alanı: ağırlık dosyası
+  YOLO'ya (dolayısıyla pickle'a) verilmeden önce doğrulanır; `git lfs pull`
+  çalıştırılmamış klonlardaki LFS işaretçileri kafa karıştırıcı torch hatası
+  yerine net bir yönlendirmeyle yakalanır. Depodaki dört model için özetler
+  eklendi.
+- `ROADVISION_MEDIA_PRUNE_INTERVAL_S` (varsayılan 60): medya kota/retention
+  temizliği her yazımdan sonra değil, en fazla bu aralıkta bir çalışır. 0
+  değeri eski davranışı korur; yeni bağlantının ilk yazımı kotayı hemen
+  uygular.
+
+### Değiştirildi
+
+- `write_batch`, psycopg pipeline destekleyen bağlantılarda statement'ları
+  toplu gönderir; 500 kayıtlık JSONL backfill grupları kayıt başına bir
+  gidiş-dönüş yerine birkaç senkronizasyonla yazılır. Idempotency ve satır
+  içerikleri sıralı yolla birebir aynıdır; test fake'leri gibi pipeline
+  sunmayan bağlantılar eski sıralı yolda kalır.
+- Canlı önizleme karesi tam çözünürlükte LANCZOS küçültme yerine önce
+  `cv2.resize` (INTER_AREA) ile önizleme boyutuna indirilir; renk dönüşümü
+  ve PIL kopyası küçük karede yapıldığından Tk ana thread'inin kare başına
+  maliyeti düşer.
+- torchvision >= 0.20 kurulumlarında detect görevleri Apple MPS üzerinde
+  bırakılır; "mps + cpu(det)" zorlaması yalnız yerel MPS NMS çekirdeği
+  taşımayan eski sürümlerde uygulanır. `predict` içindeki çalışma zamanı
+  CPU fallback'i güvenlik ağı olarak korunur.
+- `scripts/*.py --dsn` yardım metinleri, parolalı DSN'in komut satırında
+  süreç listesi ve kabuk geçmişinde görünür olduğunu belirtir ve
+  `ROADVISION_DB_DSN` ortam değişkenini önerir.
+
+### Düzeltildi
+
+- `test_multiple_cpu_models_use_distinct_pool_workers`, 6'dan az mantıksal
+  çekirdekli makinelerde (küçük CI runner'ları) model havuzu tek worker'a
+  düştüğü için Barrier zaman aşımıyla başarısız oluyordu; çekirdek sayısı
+  testte sabitlendi.
+- `ingest_key_for` içindeki SHA-1 `usedforsecurity=False` ile işaretlendi
+  (idempotency anahtarıdır; FIPS ortamları ve güvenlik tarayıcıları için).
+  Kullanılmayan iki import temizlendi; `run_models` içindeki `zip` çağrısına
+  `strict=True` eklendi.
+
 ## [1.2.2] - 2026-07-27
 
 ### Eklendi

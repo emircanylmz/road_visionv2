@@ -353,6 +353,8 @@ class DbMediaSink(MediaSink):
         max_attempts: int = 2,
         retry_delay: float = 0.25,
         sleeper: Callable[[float], None] = time.sleep,
+        prune_interval_s: float = 0.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.dsn = dsn
         self.retention_days = retention_days
@@ -362,6 +364,13 @@ class DbMediaSink(MediaSink):
         self._retry_delay = max(0.0, retry_delay)
         self._sleeper = sleeper
         self._conn: Any = None
+        # prune_media her yazımda 2× SUM(byte_size) ve anti-join DELETE
+        # çalıştırdığından büyük tablolarda pahalıya gider. 0 eski davranışı
+        # korur; pozitif değer temizliği en fazla bu aralıkta bire seyreltir.
+        # Kota aşımı, aralıktaki yazım sayısı × kare çifti boyutuyla sınırlıdır.
+        self._prune_interval_s = max(0.0, prune_interval_s)
+        self._clock = clock
+        self._last_prune_at: float | None = None
 
     def prepare_sink(self) -> None:
         # Bağlantı yalnız recorder worker'ında kurulur; UI/engine açılışı ağ
@@ -379,13 +388,16 @@ class DbMediaSink(MediaSink):
             try:
                 conn = self._ensure_connection()
                 self._store_once(conn, original, annotated, snapshot)
-                # Manuel script'e ek olarak her başarılı yazımdan sonra
-                # kalıcı süre/boyut kotasını uygula.
-                prune_media(
-                    conn,
-                    retention_days=self.retention_days,
-                    max_total_bytes=self.max_total_bytes,
-                )
+                # Manuel script'e ek olarak kalıcı süre/boyut kotasını uygula;
+                # aralık tanımlıysa temizlik yazım başına değil seyreltilerek
+                # çalışır (bkz. __init__ notu).
+                if self._should_prune():
+                    prune_media(
+                        conn,
+                        retention_days=self.retention_days,
+                        max_total_bytes=self.max_total_bytes,
+                    )
+                    self._last_prune_at = self._clock()
                 return
             except Exception as exc:
                 last_error = exc
@@ -398,6 +410,11 @@ class DbMediaSink(MediaSink):
     def release_sink(self) -> None:
         self._discard_connection()
 
+    def _should_prune(self) -> bool:
+        if self._prune_interval_s <= 0 or self._last_prune_at is None:
+            return True
+        return (self._clock() - self._last_prune_at) >= self._prune_interval_s
+
     def _ensure_connection(self) -> Any:
         if self._conn is None:
             conn = self._connection_factory(self.dsn)
@@ -409,6 +426,8 @@ class DbMediaSink(MediaSink):
                 finally:
                     raise
             self._conn = conn
+            # Yeni oturumun ilk yazımı kotayı hemen uygulasın.
+            self._last_prune_at = None
         return self._conn
 
     @staticmethod
@@ -995,6 +1014,7 @@ def create_default_recorder(
         dsn,
         retention_days=settings.retention_days,
         max_total_mb=settings.max_total_mb,
+        prune_interval_s=settings.prune_interval_s,
     )
     return MediaRecorder(
         sink,

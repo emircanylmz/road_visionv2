@@ -64,6 +64,32 @@ class ModelConfigLoaderTests(unittest.TestCase):
             with self.assertRaisesRegex(ModelConfigError, "eksik alanlar: weights"):
                 ModelConfigLoader(path).load_model_specs()
 
+    def test_sha256_is_optional_and_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            plain = model_entry("plain")
+            hashed = model_entry("hashed")
+            hashed["sha256"] = "AB" * 32  # büyük harf de kabul edilip normalize edilir
+            path = self._write_config(
+                directory,
+                {"schema_version": 1, "models": [plain, hashed]},
+            )
+            specs = {spec.id: spec for spec in ModelConfigLoader(path).load_model_specs()}
+
+            self.assertIsNone(specs["plain"].sha256)
+            self.assertEqual(specs["hashed"].sha256, "ab" * 32)
+
+    def test_invalid_sha256_is_rejected(self) -> None:
+        for bad_value in ("kisa", "z" * 64, 1234):
+            with tempfile.TemporaryDirectory() as directory:
+                entry = model_entry()
+                entry["sha256"] = bad_value
+                path = self._write_config(
+                    directory,
+                    {"schema_version": 1, "models": [entry]},
+                )
+                with self.assertRaisesRegex(ModelConfigError, "sha256"):
+                    ModelConfigLoader(path).load_model_specs()
+
 
 if __name__ == "__main__":
     unittest.main()

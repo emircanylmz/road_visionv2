@@ -27,6 +27,10 @@ class ModelSpec:
     weights: Path
     input_size: int
     color_bgr: tuple[int, int, int]
+    # Ağırlık dosyasının beklenen SHA-256 özeti (küçük harf hex). `.pt`
+    # dosyaları pickle içerdiğinden yükleme kod çalıştırır; özet verildiğinde
+    # dosya YOLO'ya teslim edilmeden önce doğrulanır. None ise atlanır.
+    sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,9 @@ class MediaConfig:
     retention_days: int = 30
     max_total_mb: int = 2048
     shutdown_timeout_s: float = 10.0
+    # Yazım başına değil, en fazla bu aralıkta bir kalıcı kota/retention
+    # temizliği çalıştırılır (0 = her başarılı yazımdan sonra, eski davranış).
+    prune_interval_s: float = 60.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "MediaConfig":
@@ -102,6 +109,9 @@ class MediaConfig:
             max_total_mb=integer("ROADVISION_MEDIA_MAX_TOTAL_MB", 2048, 1, 10_000_000),
             shutdown_timeout_s=number(
                 "ROADVISION_MEDIA_SHUTDOWN_TIMEOUT_S", 10.0, 0.1, 300.0
+            ),
+            prune_interval_s=number(
+                "ROADVISION_MEDIA_PRUNE_INTERVAL_S", 60.0, 0.0, 86_400.0
             ),
         )
 
@@ -200,6 +210,8 @@ class ModelConfigLoader:
         if not weights.is_absolute():
             weights = self.config_path.parent / weights
 
+        sha256 = self._parse_sha256(raw_model, position)
+
         return ModelSpec(
             id=model_id,
             display_name=display_name,
@@ -208,7 +220,27 @@ class ModelConfigLoader:
             weights=weights.resolve(),
             input_size=input_size,
             color_bgr=(color[0], color[1], color[2]),
+            sha256=sha256,
         )
+
+    @staticmethod
+    def _parse_sha256(raw_model: dict[str, Any], position: int) -> str | None:
+        if "sha256" not in raw_model or raw_model["sha256"] is None:
+            return None
+        value = raw_model["sha256"]
+        if not isinstance(value, str):
+            raise ModelConfigError(
+                f"models[{position - 1}].sha256 bir metin olmalıdır."
+            )
+        normalized = value.strip().lower()
+        if len(normalized) != 64 or any(
+            char not in "0123456789abcdef" for char in normalized
+        ):
+            raise ModelConfigError(
+                f"models[{position - 1}].sha256, 64 karakterlik onaltılık bir"
+                " SHA-256 özeti olmalıdır."
+            )
+        return normalized
 
     @staticmethod
     def _non_empty_string(value: Any, position: int, field: str) -> str:

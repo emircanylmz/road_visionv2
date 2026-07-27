@@ -7,6 +7,7 @@
       "short_name": "Yol çizgisi",
       "task": "semantic",
       "weights": "01_roadline_semantic/model.pt",
+      "sha256": "dfe545073e6e734fae547929b919aa18118e502c1d5351705b981f81c157aa24",
       "input_size": 1024,
       "color_bgr": [50, 210, 90],
       "enabled": true
@@ -17,6 +18,7 @@
       "short_name": "Tabela",
       "task": "detect",
       "weights": "02_tabela_detection/model.pt",
+      "sha256": "065518d782f82eb327802dcd7d77ee646fc27e830ef0674d308bea6c96e7b6a0",
       "input_size": 640,
       "color_bgr": [65, 165, 245],
       "enabled": true
@@ -27,6 +29,7 @@
       "short_name": "Çukur / Rögar",
       "task": "detect",
       "weights": "03_pothole_detection/pothole_manhole_yolo26s_768_v1/pothole_manhole_yolo26s_768_v1.pt",
+      "sha256": "bea25d688d92a02e21035801dc3efe620e5ae150aa70c73ef9ff35605d5ac9d3",
       "input_size": 768,
       "color_bgr": [60, 80, 245],
       "enabled": true
@@ -37,6 +40,7 @@
       "short_name": "İşaret hasarı",
       "task": "detect",
       "weights": "04_road_marking_damage/model.pt",
+      "sha256": "e747851bb6a4174a570c674521ee542056d23cde44f90f4644d023404ce5fbf5",
       "input_size": 640,
       "color_bgr": [225, 90, 190],
       "enabled": true

@@ -35,7 +35,9 @@ def main() -> int:
     parser.add_argument(
         "--dsn",
         default=os.environ.get("ROADVISION_DB_DSN"),
-        help="PostgreSQL DSN (varsayılan: ROADVISION_DB_DSN)",
+        help=(
+            "PostgreSQL DSN. Parola içeren DSN'i komut satırında vermek onu süreç listesinde ve kabuk geçmişinde görünür kılar; tercihen ROADVISION_DB_DSN ortam değişkenini kullanın."
+        ),
     )
     parser.add_argument(
         "--retention-days",

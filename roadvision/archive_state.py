@@ -6,7 +6,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone as fixed_timezone, tzinfo
 from enum import Enum
-from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .archive import (

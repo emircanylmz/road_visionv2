@@ -779,47 +779,47 @@ def prune_media(
         raise
 
 
-def write_batch(conn: Any, records: Sequence[tuple[LogRecord, str | None]]) -> int:
-    """Bir kayıt grubunu tek transaction içinde yazar.
+_LOG_RECORD_INSERT_SQL = """
+INSERT INTO log_records
+    (ts, level, category, message, run_id, model_id, payload, ingest_key)
+VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s::jsonb, %s)
+ON CONFLICT (ingest_key) DO NOTHING
+RETURNING id
+"""
 
-    Her öğe `(record, ingest_key)` çiftidir. Canlı akış anahtarı LogRecord
-    oluşturulurken bir kez üretilir ve retry boyunca korunur; eski JSONL
-    kayıtlarının backfill anahtarı dosya+satırdan türetilir.
-    `ON CONFLICT DO NOTHING` her iki akışı da idempotent yapar. Dönüş
-    değeri gerçekten eklenen `log_records` satırı sayısıdır.
-    """
-    inserted = 0
-    with conn.cursor() as cur:
-        for record, ingest_key in records:
-            cur.execute(
-                """
-                INSERT INTO log_records
-                    (ts, level, category, message, run_id, model_id, payload, ingest_key)
-                VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s::jsonb, %s)
-                ON CONFLICT (ingest_key) DO NOTHING
-                RETURNING id
-                """,
-                (
-                    record.timestamp,
-                    record.level.value,
-                    record.category.value,
-                    record.message,
-                    record.run_id,
-                    record.model_id,
-                    json.dumps(record.payload, ensure_ascii=False, default=str),
-                    ingest_key,
-                ),
-            )
-            if cur.fetchone() is None:
-                continue
-            inserted += 1
-            if record.category == LogCategory.DETECTION:
-                _write_detection(cur, record, ingest_key)
-    conn.commit()
-    return inserted
+_DETECTION_EVENT_INSERT_SQL = """
+INSERT INTO detection_events
+    (ts, run_id, model_id, object_count, elapsed_ms, dedup,
+     repeated_frames, capture_id, payload, ingest_key)
+VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+ON CONFLICT (ingest_key) DO NOTHING
+RETURNING id
+"""
+
+_DETECTED_OBJECT_INSERT_SQL = """
+INSERT INTO detected_objects
+    (event_id, ts, run_id, model_id, class_name, confidence, bbox, area_ratio)
+VALUES (%s, to_timestamp(%s), %s, %s, %s, %s, %s, %s)
+"""
 
 
-def _write_detection(cur: Any, record: LogRecord, ingest_key: str | None) -> None:
+def _log_record_params(record: LogRecord, ingest_key: str | None) -> tuple[Any, ...]:
+    return (
+        record.timestamp,
+        record.level.value,
+        record.category.value,
+        record.message,
+        record.run_id,
+        record.model_id,
+        json.dumps(record.payload, ensure_ascii=False, default=str),
+        ingest_key,
+    )
+
+
+def _detection_event_params(
+    record: LogRecord,
+    ingest_key: str | None,
+) -> tuple[Any, ...]:
     payload = record.payload
     capture_id = payload.get("capture_id")
     if capture_id is not None:
@@ -828,34 +828,26 @@ def _write_detection(cur: Any, record: LogRecord, ingest_key: str | None) -> Non
         except (ValueError, TypeError, AttributeError):
             # Bozuk/eski bir JSONL satırı bütün batch'i zehirlemesin.
             capture_id = None
-    cur.execute(
-        """
-        INSERT INTO detection_events
-            (ts, run_id, model_id, object_count, elapsed_ms, dedup,
-             repeated_frames, capture_id, payload, ingest_key)
-        VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (ingest_key) DO NOTHING
-        RETURNING id
-        """,
-        (
-            record.timestamp,
-            record.run_id,
-            record.model_id or "?",
-            int(payload.get("object_count", 0)),
-            payload.get("elapsed_ms"),
-            payload.get("dedup") or payload.get("closed_by"),
-            payload.get("repeated_frames") or payload.get("frames"),
-            capture_id,
-            json.dumps(payload, ensure_ascii=False, default=str),
-            ingest_key,
-        ),
+    return (
+        record.timestamp,
+        record.run_id,
+        record.model_id or "?",
+        int(payload.get("object_count", 0)),
+        payload.get("elapsed_ms"),
+        payload.get("dedup") or payload.get("closed_by"),
+        payload.get("repeated_frames") or payload.get("frames"),
+        capture_id,
+        json.dumps(payload, ensure_ascii=False, default=str),
+        ingest_key,
     )
-    row = cur.fetchone()
-    if row is None:  # ingest_key çakıştı: olay ve nesneleri zaten yazılmış
-        return
-    event_id = row[0]
-    objects: Iterable[dict[str, Any]] = payload.get("objects") or ()
-    params = [
+
+
+def _detected_object_params(
+    event_id: int,
+    record: LogRecord,
+) -> list[tuple[Any, ...]]:
+    objects: Iterable[dict[str, Any]] = record.payload.get("objects") or ()
+    return [
         (
             event_id,
             record.timestamp,
@@ -868,19 +860,122 @@ def _write_detection(cur: Any, record: LogRecord, ingest_key: str | None) -> Non
         )
         for item in objects
     ]
+
+
+def write_batch(conn: Any, records: Sequence[tuple[LogRecord, str | None]]) -> int:
+    """Bir kayıt grubunu tek transaction içinde yazar.
+
+    Her öğe `(record, ingest_key)` çiftidir. Canlı akış anahtarı LogRecord
+    oluşturulurken bir kez üretilir ve retry boyunca korunur; eski JSONL
+    kayıtlarının backfill anahtarı dosya+satırdan türetilir.
+    `ON CONFLICT DO NOTHING` her iki akışı da idempotent yapar. Dönüş
+    değeri gerçekten eklenen `log_records` satırı sayısıdır.
+
+    Bağlantı psycopg pipeline modunu destekliyorsa statement'lar toplu
+    gönderilir; 500 kayıtlık bir backfill grubu kayıt başına bir gidiş-dönüş
+    yerine birkaç senkronizasyonla yazılır. Test fake'leri gibi pipeline
+    sunmayan bağlantılar aynı semantikle sıralı yolda kalır.
+    """
+    if callable(getattr(conn, "pipeline", None)):
+        return _write_batch_pipelined(conn, records)
+    return _write_batch_sequential(conn, records)
+
+
+def _write_batch_sequential(
+    conn: Any,
+    records: Sequence[tuple[LogRecord, str | None]],
+) -> int:
+    inserted = 0
+    with conn.cursor() as cur:
+        for record, ingest_key in records:
+            cur.execute(_LOG_RECORD_INSERT_SQL, _log_record_params(record, ingest_key))
+            if cur.fetchone() is None:
+                continue
+            inserted += 1
+            if record.category == LogCategory.DETECTION:
+                _write_detection(cur, record, ingest_key)
+    conn.commit()
+    return inserted
+
+
+def _write_batch_pipelined(
+    conn: Any,
+    records: Sequence[tuple[LogRecord, str | None]],
+) -> int:
+    """`write_batch` ile birebir aynı sonucu üretir; yalnız gönderimi toplar.
+
+    Statement başına bir cursor kullanılır: pipeline içinde ilk fetch tek bir
+    senkronizasyon yapar ve sırayla gelen diğer sonuçlar tamponlanmış olur.
+    Aşamalar (log_records → detection_events → detected_objects) fetch'leri
+    araya serpiştirmeden gruplandığından tüm batch birkaç gidiş-dönüşte biter.
+    Pipeline bloğundan çıkış bekleyen hataları yükseltir; commit bu yüzden
+    bloğun dışındadır ve başarısız batch sıralı yol gibi çağırana taşınır.
+    """
+
+    inserted = 0
+    detections: list[tuple[LogRecord, str | None]] = []
+    with conn.pipeline():
+        log_cursors = []
+        for record, ingest_key in records:
+            cur = conn.cursor()
+            cur.execute(_LOG_RECORD_INSERT_SQL, _log_record_params(record, ingest_key))
+            log_cursors.append((cur, record, ingest_key))
+        for cur, record, ingest_key in log_cursors:
+            row = cur.fetchone()
+            cur.close()
+            if row is None:
+                continue
+            inserted += 1
+            if record.category == LogCategory.DETECTION:
+                detections.append((record, ingest_key))
+
+        event_cursors = []
+        for record, ingest_key in detections:
+            cur = conn.cursor()
+            cur.execute(
+                _DETECTION_EVENT_INSERT_SQL,
+                _detection_event_params(record, ingest_key),
+            )
+            event_cursors.append((cur, record))
+        pending_objects: list[list[tuple[Any, ...]]] = []
+        for cur, record in event_cursors:
+            row = cur.fetchone()
+            cur.close()
+            if row is None:  # ingest_key çakıştı: olay ve nesneleri zaten yazılmış
+                continue
+            params = _detected_object_params(row[0], record)
+            if params:
+                pending_objects.append(params)
+        for params in pending_objects:
+            with conn.cursor() as obj_cur:
+                obj_cur.executemany(_DETECTED_OBJECT_INSERT_SQL, params)
+    conn.commit()
+    return inserted
+
+
+def _write_detection(cur: Any, record: LogRecord, ingest_key: str | None) -> None:
+    cur.execute(
+        _DETECTION_EVENT_INSERT_SQL,
+        _detection_event_params(record, ingest_key),
+    )
+    row = cur.fetchone()
+    if row is None:  # ingest_key çakıştı: olay ve nesneleri zaten yazılmış
+        return
+    params = _detected_object_params(row[0], record)
     if params:
-        cur.executemany(
-            """
-            INSERT INTO detected_objects
-                (event_id, ts, run_id, model_id, class_name, confidence, bbox, area_ratio)
-            VALUES (%s, to_timestamp(%s), %s, %s, %s, %s, %s, %s)
-            """,
-            params,
-        )
+        cur.executemany(_DETECTED_OBJECT_INSERT_SQL, params)
 
 
 def ingest_key_for(source: str, line_no: int, line: str) -> str:
-    return hashlib.sha1(f"{source}:{line_no}:{line}".encode("utf-8")).hexdigest()
+    # Kriptografik değil, yalnız idempotency anahtarıdır. Daha önce backfill
+    # edilmiş kayıtların anahtarlarıyla uyum bozulmasın diye sha1'de kalınır;
+    # usedforsecurity=False bayrağı FIPS ortamlarını ve güvenlik
+    # tarayıcılarını yanlış pozitiften kurtarır.
+    digest = hashlib.sha1(
+        f"{source}:{line_no}:{line}".encode("utf-8"),
+        usedforsecurity=False,
+    )
+    return digest.hexdigest()
 
 
 def record_from_json_line(line: str) -> LogRecord | None:

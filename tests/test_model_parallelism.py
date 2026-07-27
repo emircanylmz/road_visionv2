@@ -49,7 +49,13 @@ class HiddenAnnotationAdapter:
 
 class ModelParallelismTests(unittest.TestCase):
     def test_multiple_cpu_models_use_distinct_pool_workers(self) -> None:
-        manager = ModelManager(device="cpu")
+        # Havuz genişliği `min(4, cpu // 3)` ile hesaplanır; 6'dan az
+        # çekirdekli CI makinelerinde tek worker kalır ve Barrier(2) zaman
+        # aşımına uğrardı. Çekirdek sayısını sabitlemek testi her ortamda
+        # deterministik yapar (bloklanan barrier GIL'i bıraktığından iki
+        # worker tek fiziksel çekirdekte de buluşabilir).
+        with patch("roadvision.models.manager.os.cpu_count", return_value=12):
+            manager = ModelManager(device="cpu")
         specs = manager.get_available_models()[:2]
         barrier = threading.Barrier(2)
         names: set[str] = set()

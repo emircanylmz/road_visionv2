@@ -15,6 +15,7 @@ class MediaConfigTests(unittest.TestCase):
         self.assertEqual(config.queue_max_mb, 256)
         self.assertEqual(config.retention_days, 30)
         self.assertEqual(config.max_total_mb, 2048)
+        self.assertEqual(config.prune_interval_s, 60.0)
 
     def test_environment_overrides_are_parsed(self) -> None:
         config = MediaConfig.from_env(
@@ -23,12 +24,14 @@ class MediaConfigTests(unittest.TestCase):
                 "ROADVISION_MEDIA_JPEG_QUALITY": "72",
                 "ROADVISION_MEDIA_MIN_INTERVAL_S": "0.5",
                 "ROADVISION_MEDIA_QUEUE_SIZE": "3",
+                "ROADVISION_MEDIA_PRUNE_INTERVAL_S": "12.5",
             }
         )
         self.assertEqual(config.backend, "off")
         self.assertEqual(config.jpeg_quality, 72)
         self.assertEqual(config.min_interval_s, 0.5)
         self.assertEqual(config.queue_size, 3)
+        self.assertEqual(config.prune_interval_s, 12.5)
 
     def test_invalid_values_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "ROADVISION_MEDIA"):
@@ -37,6 +40,8 @@ class MediaConfigTests(unittest.TestCase):
             MediaConfig.from_env({"ROADVISION_MEDIA_JPEG_QUALITY": "101"})
         with self.assertRaisesRegex(ValueError, "QUEUE_SIZE"):
             MediaConfig.from_env({"ROADVISION_MEDIA_QUEUE_SIZE": "x"})
+        with self.assertRaisesRegex(ValueError, "PRUNE_INTERVAL"):
+            MediaConfig.from_env({"ROADVISION_MEDIA_PRUNE_INTERVAL_S": "-1"})
 
     def test_factory_is_null_without_dsn_or_when_off(self) -> None:
         self.assertIsInstance(create_default_recorder(environ={}), NullRecorder)
