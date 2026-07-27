@@ -64,6 +64,46 @@ class MemorySink(MediaSink):
         self.release_count += 1
 
 
+class FailingMemorySink(MemorySink):
+    def store(
+        self,
+        original: EncodedImage,
+        annotated: EncodedImage,
+        snapshot: Snapshot,
+    ) -> None:
+        raise RuntimeError("medya yazılamadı")
+
+
+class TwoStageBlockingSink(MemorySink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_entered = threading.Event()
+        self.second_entered = threading.Event()
+        self.allow_first = threading.Event()
+        self.allow_second = threading.Event()
+        self._call_count = 0
+        self._call_lock = threading.Lock()
+
+    def store(
+        self,
+        original: EncodedImage,
+        annotated: EncodedImage,
+        snapshot: Snapshot,
+    ) -> None:
+        with self._call_lock:
+            self._call_count += 1
+            call_count = self._call_count
+        if call_count == 1:
+            self.first_entered.set()
+            if not self.allow_first.wait(2.0):
+                raise TimeoutError("İlk medya yazımı serbest bırakılmadı.")
+        elif call_count == 2:
+            self.second_entered.set()
+            if not self.allow_second.wait(2.0):
+                raise TimeoutError("İkinci medya yazımı serbest bırakılmadı.")
+        super().store(original, annotated, snapshot)
+
+
 class ByteEncoder:
     """Test encoder that preserves exact input bytes instead of using JPEG."""
 
@@ -410,6 +450,64 @@ class SnapshotGateTests(unittest.TestCase):
 
 
 class MediaRecorderTests(unittest.TestCase):
+    def test_checkpoint_reports_failed_store_instead_of_false_success(self) -> None:
+        sink = FailingMemorySink()
+        recorder = MediaRecorder(
+            sink,
+            encoder=ByteEncoder(),  # type: ignore[arg-type]
+            queue_size=2,
+            queue_max_bytes=1024,
+        )
+        recorder.prepare_recorder()
+        self.addCleanup(lambda: recorder.release_recorder(timeout=2.0))
+        frame = np.zeros((3, 4, 3), dtype=np.uint8)
+
+        self.assertTrue(
+            recorder.submit(
+                frame,
+                frame,
+                make_snapshot("failed", "pothole"),
+            )
+        )
+        checkpoint = recorder.request_checkpoint()
+
+        self.assertFalse(checkpoint.wait(1.0))
+        self.assertTrue(checkpoint.done)
+
+    def test_concurrent_checkpoints_keep_their_own_capture_targets(self) -> None:
+        sink = TwoStageBlockingSink()
+        recorder = MediaRecorder(
+            sink,
+            encoder=ByteEncoder(),  # type: ignore[arg-type]
+            queue_size=2,
+            queue_max_bytes=4096,
+        )
+        recorder.prepare_recorder()
+        self.addCleanup(sink.allow_first.set)
+        self.addCleanup(sink.allow_second.set)
+        self.addCleanup(lambda: recorder.release_recorder(timeout=2.0))
+        frame = np.zeros((3, 4, 3), dtype=np.uint8)
+
+        self.assertTrue(
+            recorder.submit(frame, frame, make_snapshot("first", "pothole"))
+        )
+        self.assertTrue(sink.first_entered.wait(1.0))
+        first = recorder.request_checkpoint()
+
+        self.assertTrue(
+            recorder.submit(frame, frame, make_snapshot("second", "pothole"))
+        )
+        second = recorder.request_checkpoint()
+        self.assertIsNot(first, second)
+
+        sink.allow_first.set()
+        self.assertTrue(first.wait(1.0))
+        self.assertTrue(sink.second_entered.wait(1.0))
+        self.assertFalse(second.done)
+
+        sink.allow_second.set()
+        self.assertTrue(second.wait(1.0))
+
     def test_submit_takes_ownership_by_copying_before_async_encode(self) -> None:
         sink = MemorySink()
         encoder = BlockingFirstEncoder()
@@ -427,10 +525,13 @@ class MediaRecorderTests(unittest.TestCase):
 
         self.assertTrue(recorder.submit(raw, annotated, make_snapshot("owned", "pothole")))
         self.assertTrue(encoder.entered.wait(1.0))
+        checkpoint = recorder.request_checkpoint()
+        self.assertFalse(checkpoint.wait(0.01))
         raw.fill(70)
         annotated.fill(90)
         encoder.allow.set()
         self.assertTrue(recorder.release_recorder(timeout=2.0))
+        self.assertTrue(checkpoint.wait(1.0))
 
         self.assertEqual(len(sink.records), 1)
         original, marked, _ = sink.records[0]

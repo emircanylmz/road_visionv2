@@ -16,6 +16,7 @@ from roadvision.logbook import (
     LogRecord,
     LogSink,
     NullJournal,
+    PersistenceCheckpoint,
     SessionLogSink,
 )
 
@@ -40,6 +41,15 @@ class MemorySink(LogSink):
 class FailingSink(MemorySink):
     def write_record(self, record: LogRecord) -> None:
         raise RuntimeError("sink patladı")
+
+
+class DelayedCheckpointSink(MemorySink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.checkpoint = PersistenceCheckpoint()
+
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        return self.checkpoint
 
 
 def wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -166,6 +176,18 @@ class EventJournalTests(unittest.TestCase):
         self.assertTrue(
             wait_until(lambda: any(r.payload.get("closed_by") == "run_finished" for r in memory.records))
         )
+
+    def test_checkpoint_waits_until_all_prior_sink_writes_are_acknowledged(self) -> None:
+        sink = DelayedCheckpointSink()
+        journal, _ = self.make_journal(sink=sink)
+        journal.app_event(LogLevel.INFO, "kalıcı sınır")
+
+        checkpoint = journal.request_checkpoint()
+
+        self.assertTrue(wait_until(lambda: bool(sink.records)))
+        self.assertFalse(checkpoint.wait(0.01))
+        sink.checkpoint.resolve(True)
+        self.assertTrue(checkpoint.wait(1.0))
 
     def test_min_level_filtering(self) -> None:
         memory = MemorySink(min_level=LogLevel.WARNING)

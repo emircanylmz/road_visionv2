@@ -74,6 +74,66 @@ class LogCategory(str, Enum):
     DETECTION = "detection"
 
 
+class PersistenceCheckpoint:
+    """Asenkron kalıcılık sınırının sonucunu thread-safe taşır."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._success: bool | None = None
+        self._callbacks: list[
+            Callable[[PersistenceCheckpoint], None]
+        ] = []
+
+    @classmethod
+    def completed(cls, success: bool = True) -> PersistenceCheckpoint:
+        checkpoint = cls()
+        checkpoint.resolve(success)
+        return checkpoint
+
+    def resolve(self, success: bool) -> None:
+        callbacks: list[Callable[[PersistenceCheckpoint], None]]
+        with self._lock:
+            if self._success is not None:
+                return
+            self._success = bool(success)
+            callbacks, self._callbacks = self._callbacks, []
+            self._event.set()
+        for callback in callbacks:
+            try:
+                callback(self)
+            except Exception:
+                pass
+
+    def add_done_callback(
+        self,
+        callback: Callable[[PersistenceCheckpoint], None],
+    ) -> None:
+        invoke_now = False
+        with self._lock:
+            if self._success is None:
+                self._callbacks.append(callback)
+            else:
+                invoke_now = True
+        if invoke_now:
+            try:
+                callback(self)
+            except Exception:
+                pass
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout) and self.success
+
+    @property
+    def done(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def success(self) -> bool:
+        with self._lock:
+            return self._success is True
+
+
 @dataclass(frozen=True, slots=True)
 class LogRecord:
     """Tek günlük kaydı. Tüm alanlar JSON/veritabanı dostudur."""
@@ -129,6 +189,15 @@ class LogSink(ABC):
 
     def flush(self) -> None:  # noqa: B027 - isteğe bağlı kanca
         """Alt sınıflar tamponlarını boşaltmak için ezebilir."""
+
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        """Önceki yazıların bu sink açısından tamamlandığını bildirir."""
+
+        try:
+            self.flush()
+        except Exception:
+            return PersistenceCheckpoint.completed(False)
+        return PersistenceCheckpoint.completed()
 
     @abstractmethod
     def release_sink(self) -> None: ...
@@ -497,6 +566,14 @@ class EventJournal:
     def run_finished(self, run_id: int) -> None:
         self._enqueue(("run_finished", run_id))
 
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        """O ana dek kuyruğa alınan kayıtlar sink'lere kalıcı yazılınca çözülür."""
+
+        checkpoint = PersistenceCheckpoint()
+        if self._worker is None or not self._enqueue(("checkpoint", checkpoint)):
+            checkpoint.resolve(False)
+        return checkpoint
+
     @property
     def dropped_records(self) -> int:
         with self._dropped_lock:
@@ -504,12 +581,14 @@ class EventJournal:
 
     # -- iç işleyiş ----------------------------------------------------------
 
-    def _enqueue(self, item: object) -> None:
+    def _enqueue(self, item: object) -> bool:
         try:
             self._queue.put_nowait(item)
+            return True
         except queue.Full:
             with self._dropped_lock:
                 self._dropped += 1
+            return False
 
     def _take_dropped(self) -> int:
         with self._dropped_lock:
@@ -542,8 +621,38 @@ class EventJournal:
                 self._write(record)
         elif kind == "add_sink":
             self._sinks.append(value)
+        elif kind == "checkpoint":
+            self._dispatch_checkpoint(value)
         elif kind == "close":
             self._closed.set()
+
+    def _dispatch_checkpoint(self, checkpoint: PersistenceCheckpoint) -> None:
+        sink_checkpoints: list[PersistenceCheckpoint] = []
+        for sink in self._sinks:
+            try:
+                sink_checkpoints.append(sink.request_checkpoint())
+            except Exception:
+                sink_checkpoints.append(PersistenceCheckpoint.completed(False))
+
+        if not sink_checkpoints:
+            checkpoint.resolve(True)
+            return
+        callback_lock = threading.Lock()
+        remaining = len(sink_checkpoints)
+        successful = True
+
+        def sink_done(item: PersistenceCheckpoint) -> None:
+            nonlocal remaining, successful
+            resolve = False
+            with callback_lock:
+                successful = successful and item.success
+                remaining -= 1
+                resolve = remaining == 0
+            if resolve:
+                checkpoint.resolve(successful)
+
+        for sink_checkpoint in sink_checkpoints:
+            sink_checkpoint.add_done_callback(sink_done)
 
     def _process_detection(self, record: LogRecord) -> None:
         decision = self._suppressor.observe(
@@ -611,8 +720,11 @@ class NullJournal(EventJournal):
     def release_journal(self, timeout: float = 5.0) -> None:
         return
 
-    def _enqueue(self, item: object) -> None:
-        return
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        return PersistenceCheckpoint.completed()
+
+    def _enqueue(self, item: object) -> bool:
+        return False
 
 
 def create_default_journal(log_dir: str | Path | None = None) -> EventJournal:

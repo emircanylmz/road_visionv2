@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock
 
 from roadvision.db import PostgresSink, ingest_key_for, record_from_json_line, write_batch
 from roadvision.logbook import LogCategory, LogLevel, LogRecord
@@ -224,9 +225,30 @@ class PostgresSinkTests(unittest.TestCase):
         sink.prepare_sink()
         self.addCleanup(sink.release_sink)
         sink.write_record(app_record("dayanıklı"))
+        checkpoint = sink.request_checkpoint()
+        self.assertFalse(checkpoint.wait(0.001))
         self.assertTrue(wait_until(lambda: len(attempts) >= 3))
         conn = sink._conn
         self.assertTrue(wait_until(lambda: conn is not None and len(table_rows(conn, "log_records")) == 1))
+        self.assertTrue(checkpoint.wait(1.0))
+
+    def test_concurrent_checkpoints_keep_their_own_sequence_targets(self) -> None:
+        sink = PostgresSink(
+            "postgresql://test",
+            connection_factory=lambda _dsn: FakeConnection(),
+        )
+        sink.write_record(app_record("ilk sınır"))
+        first = sink.request_checkpoint()
+        sink.write_record(app_record("ikinci sınır"))
+        second = sink.request_checkpoint()
+
+        self.assertIsNot(first, second)
+        sink._settle_sequences((1,), success=True)
+        self.assertTrue(first.wait(0.1))
+        self.assertFalse(second.done)
+
+        sink._settle_sequences((2,), success=True)
+        self.assertTrue(second.wait(0.1))
 
     def test_write_failure_rolls_back_and_requeues_batch(self) -> None:
         first_conn = FakeConnection()
@@ -316,11 +338,37 @@ class PostgresSinkTests(unittest.TestCase):
         for i in range(9):  # flusher yokken doldur
             sink.write_record(app_record(f"kayıt {i}"))
         self.assertEqual(sink.dropped_records, 4)
+        checkpoint = sink.request_checkpoint()
         sink.prepare_sink()
         self.addCleanup(sink.release_sink)
         self.assertTrue(
             wait_until(lambda: any("db_dropped" in str(s[1]) for s in table_rows(conn, "log_records")))
         )
+        self.assertFalse(checkpoint.wait(1.0))
+        self.assertTrue(checkpoint.done)
+
+    def test_release_timeout_keeps_worker_owned_connection_open(self) -> None:
+        conn = FakeConnection()
+        sink = PostgresSink(
+            "postgresql://test",
+            connection_factory=lambda _dsn: conn,
+        )
+        flusher = Mock()
+        flusher.is_alive.return_value = True
+        sink._flusher = flusher
+        sink._conn = conn
+
+        sink.release_sink()
+
+        flusher.join.assert_called_once_with(timeout=10.0)
+        self.assertIs(sink._flusher, flusher)
+        self.assertFalse(conn.closed)
+
+        # Timeouttan sonra gerçek worker kendi döngüsünden çıktığında cleanup
+        # release çağrısının ikinci kez yapılmasına bağlı kalmaz.
+        sink._flusher_loop()
+        self.assertTrue(conn.closed)
+        self.assertIsNone(sink._conn)
 
     def test_release_flushes_remaining_records(self) -> None:
         conn = FakeConnection()

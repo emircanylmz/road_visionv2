@@ -36,7 +36,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from .logbook import LogCategory, LogLevel, LogRecord, LogSink
+from .logbook import (
+    LogCategory,
+    LogLevel,
+    LogRecord,
+    LogSink,
+    PersistenceCheckpoint,
+)
 
 SCHEMA_VERSION = 3
 SCHEMA_ADVISORY_LOCK = 1_385_428_466
@@ -902,7 +908,7 @@ def _stderr_error_reporter(message: str) -> None:
     print(f"[WARNING] {message}", file=sys.stderr)
 
 
-_PendingRecord = tuple[LogRecord, str]
+_PendingRecord = tuple[int | None, LogRecord, str]
 
 
 class PostgresSink(LogSink):
@@ -935,6 +941,15 @@ class PostgresSink(LogSink):
         self._error_reporter = error_reporter
         self._queue: queue.Queue[_PendingRecord] = queue.Queue(maxsize=queue_size)
         self._retry: list[_PendingRecord] = []  # başarısız grup, öncelikli
+        self._sequence_lock = threading.Lock()
+        self._submitted_sequence = 0
+        self._resolved_sequence = 0
+        self._pending_resolved_start: int | None = None
+        self._pending_resolved_end: int | None = None
+        self._checkpoint_waiters: list[
+            tuple[int, PersistenceCheckpoint, bool]
+        ] = []
+        self._checkpoint_unclaimed_failed = False
         self._conn: Any = None
         self._flusher: threading.Thread | None = None
         self._stop = threading.Event()
@@ -962,7 +977,8 @@ class PostgresSink(LogSink):
                 return
             except queue.Full:
                 try:
-                    self._queue.get_nowait()
+                    dropped = self._queue.get_nowait()
+                    self._settle_sequences((dropped[0],), success=False)
                     with self._dropped_lock:
                         self._dropped += 1
                 except queue.Empty:
@@ -971,14 +987,45 @@ class PostgresSink(LogSink):
     def flush(self) -> None:
         self._flush_now.set()
 
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        resolve_now: tuple[PersistenceCheckpoint, bool] | None = None
+        with self._sequence_lock:
+            checkpoint = PersistenceCheckpoint()
+            target = self._submitted_sequence
+            failed = self._checkpoint_unclaimed_failed
+            if self._checkpoint_waiters:
+                # Önceki sınır henüz çözülmediyse yeni sınır onun sonucunu da
+                # kapsar; buna rağmen kendi daha ileri target'ını korur.
+                failed = failed or self._checkpoint_waiters[-1][2]
+            self._checkpoint_unclaimed_failed = False
+            if self._resolved_sequence >= target:
+                resolve_now = (checkpoint, not failed)
+            else:
+                self._checkpoint_waiters.append((target, checkpoint, failed))
+        if resolve_now is not None:
+            resolve_now[0].resolve(resolve_now[1])
+        self._flush_now.set()
+        return checkpoint
+
     def release_sink(self) -> None:
-        if self._flusher is None:
+        flusher = self._flusher
+        if flusher is None:
+            self._fail_checkpoints()
             return
         self._stop.set()
         self._flush_now.set()
-        self._flusher.join(timeout=10.0)
+        if flusher is threading.current_thread():
+            self._fail_checkpoints()
+            return
+        flusher.join(timeout=10.0)
+        if flusher.is_alive():
+            # Bağlantı flusher thread'inin mülkiyetindedir. Zaman aşımında
+            # başka thread'den close etmek çalışan commit'i yarıştırır.
+            self._fail_checkpoints()
+            return
         self._flusher = None
         self._close_connection()
+        self._fail_checkpoints()
 
     @property
     def dropped_records(self) -> int:
@@ -988,13 +1035,21 @@ class PostgresSink(LogSink):
     # -- iç işleyiş ------------------------------------------------------------
 
     def _flusher_loop(self) -> None:
-        while True:
-            self._flush_now.wait(timeout=self._flush_interval)
-            self._flush_now.clear()
-            self._drain_once()
-            if self._stop.is_set():
-                self._drain_once()  # kapanışta son kalanlar
-                return
+        try:
+            while True:
+                self._flush_now.wait(timeout=self._flush_interval)
+                self._flush_now.clear()
+                self._drain_once()
+                if self._stop.is_set():
+                    self._drain_once()  # kapanışta son kalanlar
+                    return
+        finally:
+            # Timeout nedeniyle release_sink() dönmüş olsa bile bağlantının
+            # tek sahibi olan worker, çıkarken kaynağı kesin olarak bırakır.
+            self._close_connection()
+            self._fail_checkpoints()
+            if self._flusher is threading.current_thread():
+                self._flusher = None
 
     def _collect_batch(self) -> list[_PendingRecord]:
         batch = self._retry
@@ -1030,13 +1085,21 @@ class PostgresSink(LogSink):
                         category=LogCategory.APP,
                         message="Veritabanı kuyruğu taştı; eski kayıtlar atıldı.",
                         payload={"db_dropped": dropped},
-                    )
+                    ),
+                    sequenced=False,
                 )
             )
         try:
-            write_batch(conn, records)
+            write_batch(
+                conn,
+                [(record, ingest_key) for _sequence, record, ingest_key in records],
+            )
             self._backoff = 1.0
             self._failure_reported = False
+            self._settle_sequences(
+                (sequence for sequence, _record, _key in records),
+                success=True,
+            )
             return True
         except Exception as exc:
             self._report_failure("PostgreSQL batch yazımı başarısız", exc)
@@ -1069,9 +1132,103 @@ class PostgresSink(LogSink):
             self._backoff = min(self._backoff * 2, 30.0)
             return None
 
-    @staticmethod
-    def _pending_record(record: LogRecord) -> _PendingRecord:
-        return record, record.ingest_key or f"live:{uuid.uuid4().hex}"
+    def _pending_record(
+        self,
+        record: LogRecord,
+        *,
+        sequenced: bool = True,
+    ) -> _PendingRecord:
+        sequence: int | None = None
+        if sequenced:
+            with self._sequence_lock:
+                self._submitted_sequence += 1
+                sequence = self._submitted_sequence
+        return sequence, record, record.ingest_key or f"live:{uuid.uuid4().hex}"
+
+    def _settle_sequences(
+        self,
+        sequences: Iterable[int | None],
+        *,
+        success: bool,
+    ) -> None:
+        values = sorted(
+            {
+                int(sequence)
+                for sequence in sequences
+                if sequence is not None
+            }
+        )
+        if not values:
+            return
+        ready: list[tuple[PersistenceCheckpoint, bool]] = []
+        with self._sequence_lock:
+            if not success:
+                failed_start = values[0]
+                failed_end = values[-1]
+                updated_waiters: list[
+                    tuple[int, PersistenceCheckpoint, bool]
+                ] = []
+                for target, checkpoint, failed in self._checkpoint_waiters:
+                    updated_waiters.append(
+                        (
+                            target,
+                            checkpoint,
+                            failed or failed_start <= target,
+                        )
+                    )
+                self._checkpoint_waiters = updated_waiters
+                max_target = (
+                    self._checkpoint_waiters[-1][0]
+                    if self._checkpoint_waiters
+                    else None
+                )
+                if max_target is None or failed_end > max_target:
+                    self._checkpoint_unclaimed_failed = True
+
+            start, end = values[0], values[-1]
+            if start <= self._resolved_sequence + 1:
+                self._resolved_sequence = max(self._resolved_sequence, end)
+                pending_start = self._pending_resolved_start
+                pending_end = self._pending_resolved_end
+                if (
+                    pending_start is not None
+                    and pending_end is not None
+                    and pending_start <= self._resolved_sequence + 1
+                ):
+                    self._resolved_sequence = max(
+                        self._resolved_sequence,
+                        pending_end,
+                    )
+                    self._pending_resolved_start = None
+                    self._pending_resolved_end = None
+            elif self._pending_resolved_start is None:
+                self._pending_resolved_start = start
+                self._pending_resolved_end = end
+            else:
+                self._pending_resolved_start = min(
+                    self._pending_resolved_start,
+                    start,
+                )
+                self._pending_resolved_end = max(
+                    self._pending_resolved_end or end,
+                    end,
+                )
+
+            waiting: list[tuple[int, PersistenceCheckpoint, bool]] = []
+            for target, checkpoint, failed in self._checkpoint_waiters:
+                if target <= self._resolved_sequence:
+                    ready.append((checkpoint, not failed))
+                else:
+                    waiting.append((target, checkpoint, failed))
+            self._checkpoint_waiters = waiting
+        for checkpoint, success_value in ready:
+            checkpoint.resolve(success_value)
+
+    def _fail_checkpoints(self) -> None:
+        with self._sequence_lock:
+            waiters, self._checkpoint_waiters = self._checkpoint_waiters, []
+        for _target, checkpoint, _failed in waiters:
+            checkpoint.resolve(False)
 
     def _report_failure(self, message: str, exc: Exception) -> None:
         if self._failure_reported:

@@ -2,6 +2,47 @@
 
 ## [Yayımlanmadı]
 
+## [1.2.2] - 2026-07-27
+
+### Eklendi
+
+- PostgreSQL'e yazılmış tekil tespitleri uygulama içinden açan üçüncü
+  **Tespit Arşivi** sekmesi.
+- Model → tür hiyerarşili üç durumlu seçim; son 1 saat/24 saat/7 gün/tümü/
+  özel zaman, minimum güven, run ve gerçek görüntü varlığı filtreleri.
+- Zaman, güven, alan oranı, model ve tür için çift yönlü; NULL-aware keyset
+  sayfalama ve 25/50/100 satır sayfa seçenekleri.
+- Katalog dışı model ve türleri kaybetmeyen salt-okunur arşiv sorgu katmanı.
+- Page ve facet sayımlarını aynı revision/transaction'da alan, latest-pending
+  birleştirmeli `ArchiveFetcher`.
+- Tk'den bağımsız üç durumlu seçim, filtre ve cursor geçmişi state modelleri.
+- Düzeltilmiş teknik sözleşmeleri ve performans sınırını kaydeden
+  `TESPIT_ARSIVI_PLANI.md`.
+
+### Değiştirildi
+
+- Oturum Günlüğü ve Tespit Arşivi, görüntüleyiciyi oluşturan ve yakın tarihli
+  kayıt retry durumunu kuran ortak snapshot controller'ını kullanıyor.
+- Uygulama polling/kapanış zinciri arşiv fetcher'ını UI'ı bekletmeden,
+  iki aşamalı ve idempotent biçimde yönetiyor.
+- Terminal çalışma olaylarında arşiv önce hızlı yenileniyor; ardından
+  `PostgresSink` commit checkpoint'i ve `MediaRecorder` drain checkpoint'i
+  tamamlanınca gelen `archive_ready` olayıyla kesin yenileme yapılıyor.
+- İstanbul saat dilimi verisi bulunmayan temiz Windows kurulumları için UTC+3
+  geri dönüşü ve bayat snapshot sonucunda capture kimliği koruması eklendi.
+- Uygulama sürümü v1.2.2'ye yükseltildi; veri modeli değişmediği için
+  PostgreSQL şema sürümü 3 olarak kaldı.
+
+### Doğrulama
+
+- 210 otomatik test geçti.
+- ASC/DESC, eşit değer ve NULL-fazı keyset senaryoları birim testlerle
+  doğrulandı.
+- Tree/refresh nesilleri, latest pending birleştirme, geçici bağlantı retry'ı
+  ve kapanış yarışları test edildi.
+- Canlı PostgreSQL 17 üzerinde arşiv ağacı, filtreli sayfa, facet sayımları
+  ve gerçek medya varlığı sorguları doğrulandı.
+
 ## [1.2.1] - 2026-07-24
 
 ### Eklendi

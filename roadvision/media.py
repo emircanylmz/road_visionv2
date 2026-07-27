@@ -31,7 +31,12 @@ from .db import (
     fetch_capture,
     prune_media,
 )
-from .logbook import EventJournal, LogLevel, NullJournal
+from .logbook import (
+    EventJournal,
+    LogLevel,
+    NullJournal,
+    PersistenceCheckpoint,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +509,7 @@ class _CaptureJob:
     annotated_frame: np.ndarray
     snapshot: Snapshot
     memory_bytes: int
+    sequence: int
 
 
 class MediaRecorder:
@@ -533,6 +539,12 @@ class MediaRecorder:
         self._shutdown_timeout = shutdown_timeout
         self._lock = threading.RLock()
         self._pending_bytes = 0
+        self._accepted_sequence = 0
+        self._completed_sequence = 0
+        self._checkpoint_waiters: list[
+            tuple[int, PersistenceCheckpoint, bool]
+        ] = []
+        self._checkpoint_unclaimed_failed = False
         self._dropped_unreported = 0
         self._prepared = False
         self._accepting = False
@@ -584,13 +596,17 @@ class MediaRecorder:
             try:
                 raw_owned = np.ascontiguousarray(raw_frame).copy()
                 annotated_owned = np.ascontiguousarray(annotated_frame).copy()
-                job = _CaptureJob(
-                    raw_frame=raw_owned,
-                    annotated_frame=annotated_owned,
-                    snapshot=snapshot,
-                    memory_bytes=required_bytes,
-                )
-                self._queue.put_nowait(job)
+                with self._lock:
+                    sequence = self._accepted_sequence + 1
+                    job = _CaptureJob(
+                        raw_frame=raw_owned,
+                        annotated_frame=annotated_owned,
+                        snapshot=snapshot,
+                        memory_bytes=required_bytes,
+                        sequence=sequence,
+                    )
+                    self._queue.put_nowait(job)
+                    self._accepted_sequence = sequence
                 return True
             except Exception:
                 with self._lock:
@@ -632,12 +648,32 @@ class MediaRecorder:
         with self._lock:
             self._released = True
             self._worker = None
+            waiters, self._checkpoint_waiters = self._checkpoint_waiters, []
+        for _target, checkpoint, _failed in waiters:
+            checkpoint.resolve(False)
         return True
 
     @property
     def pending_bytes(self) -> int:
         with self._lock:
             return self._pending_bytes
+
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        resolve_now: tuple[PersistenceCheckpoint, bool] | None = None
+        with self._lock:
+            checkpoint = PersistenceCheckpoint()
+            target = self._accepted_sequence
+            failed = self._checkpoint_unclaimed_failed
+            if self._checkpoint_waiters:
+                failed = failed or self._checkpoint_waiters[-1][2]
+            self._checkpoint_unclaimed_failed = False
+            if self._completed_sequence >= target:
+                resolve_now = (checkpoint, not failed)
+            else:
+                self._checkpoint_waiters.append((target, checkpoint, failed))
+        if resolve_now is not None:
+            resolve_now[0].resolve(resolve_now[1])
+        return checkpoint
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set() or not self._queue.empty():
@@ -646,12 +682,14 @@ class MediaRecorder:
             except queue.Empty:
                 continue
             try:
+                job_success = True
                 original = self._encoder.encode(job.raw_frame)
                 annotated = self._encoder.encode(job.annotated_frame)
                 self._sink.store(original, annotated, job.snapshot)
                 self._failure_active = False
                 self._report_dropped()
             except Exception as exc:
+                job_success = False
                 if not self._failure_active:
                     self._failure_active = True
                     self._report(
@@ -661,9 +699,39 @@ class MediaRecorder:
                         capture_id=job.snapshot.capture_id,
                     )
             finally:
+                ready: list[tuple[PersistenceCheckpoint, bool]] = []
                 with self._lock:
                     self._pending_bytes = max(0, self._pending_bytes - job.memory_bytes)
+                    self._completed_sequence = max(
+                        self._completed_sequence,
+                        job.sequence,
+                    )
+                    if not job_success:
+                        updated_waiters: list[
+                            tuple[int, PersistenceCheckpoint, bool]
+                        ] = []
+                        matched = False
+                        for target, checkpoint, failed in self._checkpoint_waiters:
+                            applies = job.sequence <= target
+                            matched = matched or applies
+                            updated_waiters.append(
+                                (target, checkpoint, failed or applies)
+                            )
+                        self._checkpoint_waiters = updated_waiters
+                        if not matched:
+                            self._checkpoint_unclaimed_failed = True
+                    waiting: list[
+                        tuple[int, PersistenceCheckpoint, bool]
+                    ] = []
+                    for target, checkpoint, failed in self._checkpoint_waiters:
+                        if target <= self._completed_sequence:
+                            ready.append((checkpoint, not failed))
+                        else:
+                            waiting.append((target, checkpoint, failed))
+                    self._checkpoint_waiters = waiting
                 self._queue.task_done()
+                for checkpoint, success_value in ready:
+                    checkpoint.resolve(success_value)
 
     def _report_dropped(self) -> None:
         with self._lock:
@@ -701,6 +769,9 @@ class NullRecorder:
 
     def release_recorder(self, timeout: float | None = None) -> bool:
         return True
+
+    def request_checkpoint(self) -> PersistenceCheckpoint:
+        return PersistenceCheckpoint.completed()
 
 
 @dataclass(frozen=True, slots=True)

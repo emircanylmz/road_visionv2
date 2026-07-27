@@ -1,9 +1,9 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.2.1 — 24 Temmuz 2026
+**Kararlı sürüm:** v1.2.2 — 27 Temmuz 2026
 
 İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), bu sürümün
-özeti için [VERSION_1_2_1.md](VERSION_1_2_1.md), tüm değişiklikler için
+özeti için [VERSION_1_2_2.md](VERSION_1_2_2.md), tüm değişiklikler için
 [CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı
 [LOGGING.md](LOGGING.md), PostgreSQL ve medya kaydı [DATABASE.md](DATABASE.md)
 belgelerinde açıklanır.
@@ -70,6 +70,8 @@ Arayüzde:
 4. İşlem sürerken model kutularını açıp kapatabilirsiniz.
 5. Sağ taraftaki **Oturum Günlüğü** sekmesinden uygulama olaylarını ve model tespitlerini anlık izleyebilirsiniz.
 6. 📷 işaretli tespit satırına çift tıklayarak işaretli veya orijinal kayıt görüntüsünü açabilirsiniz.
+7. **Tespit Arşivi** sekmesinde PostgreSQL'e yazılmış geçmiş tespitleri
+   model/tür, zaman, güven, run ve görüntü varlığına göre filtreleyebilirsiniz.
 
 ## Olay ve tespit günlüğü
 
@@ -84,6 +86,22 @@ Kalıcı kayıtlar JSONL biçiminde aşağıdaki dosyaya yazılır:
 Dosya 5 MB'a ulaştığında önceki içerik `roadvision.jsonl.1` olarak döndürülür. Disk yazımı inference ve UI thread'lerini bekletmez. Art arda aynı modelden aynı sayıda tespit gelirse tekrarlar bastırılır; değişiklikler ve uzun süren serilerin özetleri kaydedilir. Ayrıntılı kayıt şeması, yaşam döngüsü ve genişletme noktaları için [LOGGING.md](LOGGING.md) dosyasına bakın.
 
 Her modelin güven eşiği bağımsızdır. **Box göster** veya **Maske göster** kapatıldığında model arka planda tespit yapmaya ve istatistik üretmeye devam eder; yalnızca ilgili çizim önizlemede gösterilmez.
+
+## Tespit Arşivi
+
+`ROADVISION_DB_DSN` tanımlıysa sağ paneldeki **Tespit Arşivi** sekmesi,
+PostgreSQL şema 3'teki tekil tespitleri salt-okunur ve asenkron sorgular.
+Sekme ilk açılışta son 24 saati gösterir. Model → tür ağacı üç durumlu
+seçim; zaman, minimum güven, run ve yalnız gerçek görüntüsü bulunan kayıt
+filtreleri sunar. Zaman, güven, alan oranı, model ve tür kolonları iki yönde
+sıralanabilir; sonuçlar OFFSET yerine keyset imleçleriyle sayfalanır.
+
+Arşiv tablosundaki 📷 işaretli satıra çift tıklamak mevcut tekil görüntüleyici
+penceresini açar. `capture_id` bulunmasına rağmen medya saklama süresi dolmuş
+bir kayıt görüntülü kabul edilmez. DSN tanımsızsa sekme kurulum bağlantısını
+gösterir; DB hatası inference veya canlı oturum günlüğünü durdurmaz. Çalışma
+sonundaki kesin yenileme, journal commit'i ve medya kuyruğu drain
+checkpoint'leri tamamlandığında asenkron olarak tetiklenir.
 
 v1.0.1'de kaynak türü, dosya veya kamera seçimi değiştirildiğinde etkin çalışma güvenli biçimde durdurulur; eski önizleme temizlenir ve düğme **Başlat** durumuna sıfırlanır. Durdurma tamamlanmadan yeni çalışma başlatılmaz.
 
@@ -109,6 +127,8 @@ macOS AVFoundation kamera indekslerini ardışık sunduğu için tarama ilk boş
 app.py
 └── RoadVisionApp                 # Yalnızca Tk ana thread'inde UI günceller
     ├── EventJournal              # JSONL + PostgreSQL + canlı oturum günlüğü
+    ├── ArchiveFetcher            # Salt-okunur latest-refresh DB worker'ı
+    ├── ArchivePage               # Filtreli, keyset sayfalı geçmiş görünümü
     └── ProcessingEngine          # Worker yaşam döngüsü ve latest-frame kuyruğu
         ├── MediaRecorder         # Sınırlı async JPEG + MediaSink
         ├── MediaSource
@@ -147,16 +167,20 @@ Testler kamera yaşam döngüsünü, Unicode fotoğraf yolunu, image source davr
 Günlük/veritabanı/medya testleri; JSONL yazımı ve rotasyonu, seviye filtresi,
 kuyruk taşması, sink hata izolasyonu, tekrar bastırma, PostgreSQL migration,
 görüntü kapısı, JPEG tekilleştirme ve capture korelasyonunu da doğrular.
+Arşiv testleri ayrıca ASC/DESC ve NULL-aware keyset üretimini, model/tür
+seçim durumunu, latest-refresh birleştirmesini ve güvenli worker kapanışını
+kapsar.
 
 Docker PostgreSQL kurulumu, pgAdmin sorguları, görüntü dışa aktarma ve saklama
 kotası için [DATABASE.md](DATABASE.md); gözden geçirilmiş tasarım kararları
-için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) dosyasına bakın.
+için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) ve
+[TESPIT_ARSIVI_PLANI.md](TESPIT_ARSIVI_PLANI.md) dosyalarına bakın.
 
 ## Sürüm geçmişi ve geri dönüş
 
 Kararlı sürümler Git etiketleriyle korunur. Güncel geliştirme `main`
-dalındadır; `v1.2.1`, `v1.2.0`, `v1.1.0`, `v1.0.1` ve `v1.0.0` sürümleri kendi
-etiketlerinden açılabilir.
+dalındadır; yayımlanmış `v1.2.2`, `v1.2.1`, `v1.2.0`, `v1.1.0`, `v1.0.1`
+ve `v1.0.0` sürümleri kendi etiketlerinden açılabilir.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:
 

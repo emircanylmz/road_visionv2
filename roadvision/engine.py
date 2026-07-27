@@ -12,7 +12,13 @@ from typing import Any
 import numpy as np
 
 from .config import PerformanceProfile
-from .logbook import EventJournal, LogLevel, NullJournal, detection_signature
+from .logbook import (
+    EventJournal,
+    LogLevel,
+    NullJournal,
+    PersistenceCheckpoint,
+    detection_signature,
+)
 from .media import (
     CaptureModel,
     GateObservation,
@@ -44,6 +50,8 @@ class EngineEvent:
     total_ms: float = 0.0
     source_name: str = ""
     run_id: int = 0
+    journal_persisted: bool | None = None
+    media_persisted: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +106,9 @@ class ProcessingEngine:
         self._shutdown_started = False
         self._shutdown_complete = threading.Event()
         self._shutdown_thread: threading.Thread | None = None
+        self._archive_checkpoint_lock = threading.Lock()
+        self._archive_checkpoint_running = False
+        self._archive_checkpoint_latest_run_id = 0
         self._manager = model_manager or ModelManager(status_callback=self._emit_status)
         self._recorder: MediaRecorder | NullRecorder = recorder or NullRecorder()
         self._gate = gate or self._recorder.gate
@@ -326,11 +337,108 @@ class ProcessingEngine:
                 self._active_run = None
                 self._set_state(EngineState.IDLE)
         self._journal.run_finished(context.run_id)
+        self._schedule_archive_checkpoint(context.run_id)
         context.finished_event.set()
 
         with self._lifecycle_lock:
             if self._shutdown_requested and self._active_run is None:
                 self._ensure_shutdown_worker_locked()
+
+    @staticmethod
+    def _request_persistence_checkpoint(component: Any) -> PersistenceCheckpoint:
+        request = getattr(component, "request_checkpoint", None)
+        if not callable(request):
+            return PersistenceCheckpoint.completed()
+        try:
+            checkpoint = request()
+        except Exception:
+            return PersistenceCheckpoint.completed(False)
+        if isinstance(checkpoint, PersistenceCheckpoint):
+            return checkpoint
+        return PersistenceCheckpoint.completed(bool(checkpoint))
+
+    def _schedule_archive_checkpoint(self, run_id: int) -> None:
+        start_run_id: int | None = None
+        with self._archive_checkpoint_lock:
+            self._archive_checkpoint_latest_run_id = max(
+                self._archive_checkpoint_latest_run_id,
+                run_id,
+            )
+            if not self._archive_checkpoint_running:
+                self._archive_checkpoint_running = True
+                start_run_id = self._archive_checkpoint_latest_run_id
+        if start_run_id is not None:
+            self._begin_archive_checkpoint(start_run_id)
+
+    def _begin_archive_checkpoint(self, run_id: int) -> None:
+        journal_checkpoint = self._request_persistence_checkpoint(self._journal)
+        media_checkpoint = self._request_persistence_checkpoint(self._recorder)
+        callback_lock = threading.Lock()
+        remaining = 2
+        results: dict[str, bool] = {}
+
+        def checkpoint_done(
+            kind: str,
+            checkpoint: PersistenceCheckpoint,
+        ) -> None:
+            nonlocal remaining
+            finish = False
+            with callback_lock:
+                results[kind] = checkpoint.success
+                remaining -= 1
+                finish = remaining == 0
+            if finish:
+                self._archive_checkpoint_finished(
+                    run_id,
+                    journal_success=results.get("journal", False),
+                    media_success=results.get("media", False),
+                )
+
+        journal_checkpoint.add_done_callback(
+            lambda checkpoint: checkpoint_done("journal", checkpoint)
+        )
+        media_checkpoint.add_done_callback(
+            lambda checkpoint: checkpoint_done("media", checkpoint)
+        )
+
+    def _archive_checkpoint_finished(
+        self,
+        run_id: int,
+        *,
+        journal_success: bool,
+        media_success: bool,
+    ) -> None:
+        next_run_id: int | None = None
+        emit_settled = False
+        with self._archive_checkpoint_lock:
+            if self._archive_checkpoint_latest_run_id > run_id:
+                next_run_id = self._archive_checkpoint_latest_run_id
+            else:
+                self._archive_checkpoint_running = False
+                # Refresh, kalıcılık denemelerinin başarı durumundan değil
+                # tamamlanma sınırından beslenir. Başarısız bir medya işi de
+                # journal'da kalıcı olmuş tespitlerin son görünümünü değiştirir.
+                emit_settled = True
+        if next_run_id is not None:
+            self._begin_archive_checkpoint(next_run_id)
+        elif emit_settled:
+            persistence_ok = journal_success and media_success
+            self._emit(
+                EngineEvent(
+                    kind="archive_ready",
+                    message=(
+                        "Çalışmanın kalıcı kayıtları arşiv sorgusuna hazır."
+                        if persistence_ok
+                        else (
+                            "Kalıcılık işlemleri sonuçlandı; arşiv görünümü "
+                            "mevcut kayıtlarla yenilenebilir."
+                        )
+                    ),
+                    run_id=run_id,
+                    journal_persisted=journal_success,
+                    media_persisted=media_success,
+                )
+            )
 
     def _ensure_shutdown_worker_locked(self) -> None:
         if self._shutdown_started or self._active_run is not None:

@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 import cv2
 from PIL import Image, ImageTk
 
+from ..archive_fetcher import create_default_archive_fetcher
 from ..camera import Camera, CameraInfo
 from ..config import APP_CONFIG, MODEL_SPECS, PerformanceProfile
 from ..db import CaptureBundle, CaptureMedia
@@ -24,6 +25,7 @@ from ..media import (
     create_default_snapshot_fetcher,
 )
 from ..sources import SourceFactory, SourceKind
+from .archive_page import ArchivePage
 
 
 BG = "#0b1118"
@@ -249,6 +251,8 @@ class RoadVisionApp:
         self._events: queue.Queue[EngineEvent] = queue.Queue()
         self._recorder = create_default_recorder(self._journal)
         self._snapshot_fetcher = create_default_snapshot_fetcher()
+        self._archive_fetcher = create_default_archive_fetcher()
+        self._archive_poll_error_reported = False
         self._snapshot_viewer: SnapshotViewerWindow | None = None
         self._snapshot_generation = 0
         self._snapshot_capture_id: str | None = None
@@ -443,6 +447,31 @@ class RoadVisionApp:
         ttk.Label(status_bar, textvariable=self.status_text, style="Muted.TLabel").pack(side="left", fill="x", expand=True)
 
         self._build_log_panel()
+        self._build_archive_panel()
+        self.content_tabs.bind(
+            "<<NotebookTabChanged>>",
+            self._on_content_tab_changed,
+            add="+",
+        )
+
+    def _build_archive_panel(self) -> None:
+        self.archive_page = ArchivePage(
+            self.content_tabs,
+            fetcher=self._archive_fetcher,
+            on_open_capture=self._open_snapshot_capture,
+        )
+        self.content_tabs.add(self.archive_page, text="Tespit Arşivi")
+
+    def _on_content_tab_changed(self, _event: tk.Event | None = None) -> None:
+        page = getattr(self, "archive_page", None)
+        tabs = getattr(self, "content_tabs", None)
+        if page is None or tabs is None:
+            return
+        try:
+            if tabs.select() == str(page):
+                page.activate()
+        except tk.TclError:
+            return
 
     def _build_log_panel(self) -> None:
         log_panel = ttk.Frame(self.content_tabs, style="Panel.TFrame", padding=12)
@@ -925,11 +954,12 @@ class RoadVisionApp:
     def _poll_events(self) -> None:
         self._poll_log_records()
         self._poll_snapshot_results()
+        self._poll_archive_results()
         latest_frame: EngineEvent | None = None
         try:
             while not self._closed:
                 event = self._events.get_nowait()
-                if event.kind == "shutdown_complete":
+                if event.kind in {"shutdown_complete", "archive_ready"}:
                     self._handle_event(event)
                     continue
                 if not self._event_belongs_to_active_run(event):
@@ -947,6 +977,24 @@ class RoadVisionApp:
         self._update_start_availability()
         if self.root.winfo_exists():
             self.root.after(33, self._poll_events)
+
+    def _poll_archive_results(self) -> None:
+        page = getattr(self, "archive_page", None)
+        if page is None:
+            return
+        try:
+            page.poll_results(max_items=8)
+            self._archive_poll_error_reported = False
+        except Exception as exc:
+            # Bir render/adaptör hatası ana 33 ms heartbeat'i durdurmamalı.
+            if getattr(self, "_archive_poll_error_reported", False):
+                return
+            self._archive_poll_error_reported = True
+            self._journal.app_event(
+                LogLevel.ERROR,
+                "Tespit arşivi sonucu arayüze uygulanamadı.",
+                archive_error=str(exc),
+            )
 
     def _poll_log_records(self) -> None:
         sink = getattr(self, "_session_log_sink", None)
@@ -1031,6 +1079,29 @@ class RoadVisionApp:
             self.status_text.set("Seçili günlük satırında tespit görüntüsü yok.")
             return
 
+        self._open_snapshot_capture(
+            capture_id,
+            self._log_capture_times.get(item_id),
+        )
+
+    def _open_snapshot_capture(
+        self,
+        capture_id: str,
+        capture_time: datetime | float | None = None,
+    ) -> None:
+        """Viewer yaşam döngüsünü günlük ve arşiv satırları için ortak yönetir."""
+
+        fetcher = getattr(self, "_snapshot_fetcher", None)
+        if fetcher is None:
+            self.status_text.set(
+                "Tespit görüntüleyici kapalı: ROADVISION_DB_DSN tanımlı değil."
+            )
+            return
+        normalized = str(capture_id).strip()
+        if not normalized:
+            self.status_text.set("Seçili tespit satırında görüntü kimliği yok.")
+            return
+
         viewer = self._snapshot_viewer
         if viewer is None or not viewer.exists():
             viewer = SnapshotViewerWindow(
@@ -1039,11 +1110,16 @@ class RoadVisionApp:
                 on_close=self._snapshot_viewer_closed,
             )
             self._snapshot_viewer = viewer
-        self._snapshot_capture_id = capture_id
-        self._snapshot_capture_time = self._log_capture_times.get(item_id)
+        self._snapshot_capture_id = normalized
+        if isinstance(capture_time, datetime):
+            self._snapshot_capture_time = capture_time.timestamp()
+        elif capture_time is None:
+            self._snapshot_capture_time = None
+        else:
+            self._snapshot_capture_time = float(capture_time)
         self._snapshot_retry_attempted = False
-        viewer.show_loading(capture_id)
-        self._request_snapshot(capture_id)
+        viewer.show_loading(normalized)
+        self._request_snapshot(normalized)
 
     def _request_snapshot(self, capture_id: str) -> None:
         fetcher = getattr(self, "_snapshot_fetcher", None)
@@ -1068,7 +1144,10 @@ class RoadVisionApp:
         if fetcher is None:
             return
         for result in fetcher.drain():
-            if result.generation != self._snapshot_generation:
+            if (
+                result.generation != self._snapshot_generation
+                or result.capture_id != self._snapshot_capture_id
+            ):
                 continue
             viewer = getattr(self, "_snapshot_viewer", None)
             if viewer is None or not viewer.exists():
@@ -1121,9 +1200,16 @@ class RoadVisionApp:
         return self._active_run_id is not None and event.run_id == self._active_run_id
 
     def _handle_event(self, event: EngineEvent) -> None:
+        if event.kind == "archive_ready":
+            if not self._closing and not self._closed:
+                self._mark_archive_dirty(delay_ms=0)
+            return
         if event.kind == "shutdown_complete":
             if self._closing and not self._closed:
                 self._closed = True
+                archive_fetcher = getattr(self, "_archive_fetcher", None)
+                if archive_fetcher is not None:
+                    archive_fetcher.close(timeout=0.25)
                 fetcher = getattr(self, "_snapshot_fetcher", None)
                 if fetcher is not None:
                     fetcher.close(timeout=0.25)
@@ -1155,17 +1241,29 @@ class RoadVisionApp:
         elif event.kind == "source_ended":
             self.status_text.set(event.message + " Son kare üzerinde model seçimini değiştirebilirsiniz.")
             self.status_dot.configure(fg="#ffd166")
+            self._mark_archive_dirty()
         elif event.kind == "error":
             self._active_run_id = None
             self.status_text.set(event.message)
             self.status_dot.configure(fg=DANGER)
             self._set_running_ui(False)
+            self._mark_archive_dirty()
             messagebox.showerror("İşlem hatası", event.message, parent=self.root)
         elif event.kind == "stopped":
             self._active_run_id = None
             self.status_text.set(event.message)
             self.performance_text.set(f"Aygıt: {self.engine.device.upper()}")
             self._set_running_ui(False)
+            self._mark_archive_dirty()
+
+    def _mark_archive_dirty(self, *, delay_ms: int = 750) -> None:
+        page = getattr(self, "archive_page", None)
+        if page is None or self._closing or self._closed:
+            return
+        try:
+            page.mark_dirty(delay_ms=max(0, int(delay_ms)))
+        except tk.TclError:
+            return
 
     def _display_frame(self, frame) -> None:
         width = max(320, self.preview.winfo_width())
@@ -1184,6 +1282,12 @@ class RoadVisionApp:
         if self._closing or self._closed:
             return
         self._closing = True
+        archive_page = getattr(self, "archive_page", None)
+        if archive_page is not None:
+            archive_page.begin_close()
+        archive_fetcher = getattr(self, "_archive_fetcher", None)
+        if archive_fetcher is not None:
+            archive_fetcher.close(timeout=0.0)
         fetcher = getattr(self, "_snapshot_fetcher", None)
         if fetcher is not None:
             fetcher.close(timeout=0.0)

@@ -7,6 +7,7 @@ import unittest
 import numpy as np
 
 from roadvision.engine import EngineEvent, EngineState, ProcessingEngine
+from roadvision.logbook import PersistenceCheckpoint
 from roadvision.models.manager import AnalysisResult
 from roadvision.models.registry import ModelRegistry
 from roadvision.sources import MediaSource, SourceKind
@@ -177,6 +178,80 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(engine.state, EngineState.IDLE)
         self.assertTrue(source.released)
         self.assertEqual(source.release_count, 1)
+
+    def test_archive_ready_follows_terminal_event_after_persistence_checkpoints(self) -> None:
+        events: list[EngineEvent] = []
+        engine = ProcessingEngine(events.append, model_manager=FakeManager())  # type: ignore[arg-type]
+
+        run_id = engine.start(StaticSource(), {"pothole"})
+        self.assertTrue(
+            wait_until(
+                lambda: any(
+                    event.kind == "frame" and event.run_id == run_id
+                    for event in events
+                )
+            )
+        )
+        self.assertTrue(engine.stop(timeout=1.0))
+        self.assertTrue(
+            wait_until(
+                lambda: any(
+                    event.kind == "archive_ready" and event.run_id == run_id
+                    for event in events
+                )
+            )
+        )
+
+        ordered = [
+            event.kind
+            for event in events
+            if event.run_id == run_id
+            and event.kind in {"stopped", "archive_ready"}
+        ]
+        self.assertEqual(ordered, ["stopped", "archive_ready"])
+        ready = next(event for event in events if event.kind == "archive_ready")
+        self.assertTrue(ready.journal_persisted)
+        self.assertTrue(ready.media_persisted)
+
+    def test_pending_archive_checkpoints_coalesce_to_latest_run_without_threads(self) -> None:
+        events: list[EngineEvent] = []
+        engine = ProcessingEngine(events.append, model_manager=FakeManager())  # type: ignore[arg-type]
+
+        class CheckpointComponent:
+            def __init__(self) -> None:
+                self.requests: list[PersistenceCheckpoint] = []
+
+            def request_checkpoint(self) -> PersistenceCheckpoint:
+                checkpoint = PersistenceCheckpoint()
+                self.requests.append(checkpoint)
+                return checkpoint
+
+        journal = CheckpointComponent()
+        recorder = CheckpointComponent()
+        engine._journal = journal  # type: ignore[assignment]
+        engine._recorder = recorder  # type: ignore[assignment]
+
+        engine._schedule_archive_checkpoint(1)
+        engine._schedule_archive_checkpoint(2)
+
+        self.assertEqual(len(journal.requests), 1)
+        self.assertEqual(len(recorder.requests), 1)
+        # Bayat run başarısız sonuçlansa da ayrı refresh olayı üretmemeli.
+        journal.requests[0].resolve(False)
+        recorder.requests[0].resolve(True)
+        self.assertEqual(len(journal.requests), 2)
+        self.assertEqual(len(recorder.requests), 2)
+        self.assertFalse(any(event.kind == "archive_ready" for event in events))
+
+        journal.requests[1].resolve(True)
+        # En güncel run'da bir kalıcılık kolu başarısız olsa bile tamamlanma
+        # sınırı arşivin mevcut DB durumuyla yenilenmesini tetiklemelidir.
+        recorder.requests[1].resolve(False)
+
+        ready = [event for event in events if event.kind == "archive_ready"]
+        self.assertEqual([(event.kind, event.run_id) for event in ready], [("archive_ready", 2)])
+        self.assertTrue(ready[0].journal_persisted)
+        self.assertFalse(ready[0].media_persisted)
 
     def test_start_requires_at_least_one_model(self) -> None:
         engine = ProcessingEngine(lambda _event: None, model_manager=FakeManager())  # type: ignore[arg-type]

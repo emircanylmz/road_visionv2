@@ -114,6 +114,40 @@ Hazır görünümler:
 join'lerini destekler. Hacim milyonlarca satıra çıktığında günlük özet için
 artımlı rollup ve zaman partitioning ayrı migration olarak değerlendirilebilir.
 
+## Uygulama içindeki Tespit Arşivi
+
+v1.2.2, şema 3'teki tekil tespitleri sağ paneldeki **Tespit Arşivi**
+sekmesinde salt-okunur olarak gösterir. DSN tanımlı değilse fetcher kurulmaz;
+DB veya şema hatası canlı inference, günlük ve medya yazma hatlarını
+etkilemez.
+
+Arşiv sorgusunun ilişki tabanı:
+
+```sql
+FROM detected_objects AS o
+JOIN detection_events AS e ON e.id = o.event_id
+JOIN detection_types AS t ON t.type_id = o.type_id
+LEFT JOIN roadvision_model_catalog AS m ON m.model_id = o.model_id
+LEFT JOIN media_captures AS mc ON mc.capture_id = e.capture_id
+```
+
+“Yalnız görüntüsü olanlar” filtresi özellikle `mc.capture_id IS NOT NULL`
+kullanır. `detection_events.capture_id` tek başına yeterli değildir: medya
+worker'ı daha sonra yazamamış veya retention capture'ı silmiş olabilir.
+
+Varsayılan sorgu son 24 saat ve yeni→eski zaman sırasıdır. Diğer filtreler
+minimum güven, run ve model/tür seçimidir. Sayfalama OFFSET yerine
+ASC/DESC ve NULL değerleri açıkça yöneten keyset imleçleri kullanır.
+Page ve filtre sayımları tek refresh revision'ında, aynı
+`REPEATABLE READ, READ ONLY` transaction'da alınır.
+
+Şema 3 bu özelliğin işlevsel sözleşmesi için yeterlidir. Mevcut indeksler
+özellikle zaman/tür yoluna yardımcı olur; confidence, alan oranı veya
+Türkçe görünen ad sıralamalarında eşleşen küme ayrıca sıralanabilir.
+Milyonlarca satır için bir SLA gerektiğinde temsili veri üzerinde
+`EXPLAIN (ANALYZE, BUFFERS)` ölçülmeli ve sonuçlara göre ayrı şema
+migration'ında composite indeksler eklenmelidir.
+
 ## V2 → V3 güvenli yükseltme
 
 Uygulama ilk v3 bağlantısında migration'ı otomatik yapar. Docker veritabanını
@@ -200,6 +234,10 @@ python3 scripts/export_media.py CAPTURE_UUID --output-dir exports
 - Her canlı kayıt oluşturulurken benzersiz bir `ingest_key` alır; aynı anahtar JSONL satırında saklanır ve PostgreSQL retry boyunca korunur. Böylece hem commit sonucunun belirsiz kaldığı bağlantı kopmalarında hem de JSONL backfill işleminde mükerrer satır oluşmaz.
 - Başarısız batch kuyruğun önüne geri konur. Veri kaybı yalnız kuyruk taşarsa olur; o durumda en eski kayıt atılır ve atılan sayısı, yazma ilk denemede başarısız olsa bile korunan bir `db_dropped` uyarısıyla veritabanına düşülür.
 - Uygulama kapanırken `release_sink`, veritabanı erişilebildiği ölçüde kalan kayıtları yazar ve bağlantıyı kapatır; JSONL kaydı backfill için kalır.
+- Çalışma sonundaki `PostgresSink` checkpoint'i o ana dek kabul edilmiş sıra
+  hedefi commit edilene kadar çözülmez. `MediaRecorder` kendi kabul edilmiş
+  capture hedefini drain edince engine `archive_ready` üretir; uygulama içi
+  arşiv bu onaydan sonra kesin yenileme yapar.
 - Günlük ve medya kuyrukları bilinçli olarak sınırlıdır. Aşırı yükte veya
   uzun DB kesintisinde kayıt düşebilir ve uyarı üretilir; bu hatlar
   best-effort'tur, kalıcı transactional outbox garantisi vermez.

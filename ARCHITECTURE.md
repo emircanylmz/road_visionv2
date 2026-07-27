@@ -105,6 +105,11 @@ Engine'e opsiyonel `EventJournal`, `MediaRecorder` ve `SnapshotGate` enjekte edi
 
 `EventJournal` üretici çağrılarını sınırlı kuyruğa `put_nowait` ile bırakır. Tek yazıcı thread tekrar bastırmayı uygular ve kayıtları bütün sink'lere sıralı biçimde iletir. Bir sink'in hatası diğer hedefleri veya uygulamayı düşürmez. Kuyruk taşarsa üretici bekletilmez; düşen kayıt sayısı sonraki yazılabilen kaydın payload alanına eklenir.
 
+`PersistenceCheckpoint`, bir çalışma sonundaki journal sınırını asenkron
+olarak taşır. Journal marker'ı önceki kayıtları sink'lere teslim ettikten
+sonra `PostgresSink` kendi sıralı kayıt hedefinin commit edilmesini bekler;
+retry/backoff UI'a veya inference'a taşınmaz.
+
 `DetectionSuppressor`, `(run_id, model_id)` anahtarında art arda aynı tespit imzasını tek kayda indirger. İmza değişiminde önceki serinin kare ve süre özeti, uzun sabit serilerde heartbeat, çalışma sonunda kapanış özeti üretilir.
 
 Varsayılan günlük kurulumu sırasıyla kullanıcı cache dizini ve geçici dizini dener; dosya hedefi oluşturulamazsa konsol hedefiyle çalışmayı sürdürür. Ayrıntılar [LOGGING.md](LOGGING.md) belgesindedir.
@@ -117,11 +122,54 @@ Varsayılan günlük kurulumu sırasıyla kullanıcı cache dizini ve geçici di
 
 `MediaRecorder`, kabul edilen ham ve ortak işaretli karelerin sahiplik kopyasını adet ve RAM-baytı sınırlı kuyruğa alır. Tek worker JPEG kodlar ve `MediaSink`'e yazar. `DbMediaSink`, SHA-256 blob tekilleştirmesi, capture/model idempotency ve otomatik süre/boyut kotasını uygular. `NullRecorder` medya kapalıyken no-op'tur. Ayrıntılar [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) ve [DATABASE.md](DATABASE.md) belgelerindedir.
 
+Recorder checkpoint'i çağrı anına kadar kabul edilmiş sequence hedefini
+yakalar ve tek worker bu hedefe kadar bütün store denemelerini bitirdiğinde
+çözülür. Engine journal ve medya checkpoint'leri birlikte başarılı olunca
+`archive_ready` üretir; arşiv görünümü kalıcı yazıların önüne geçmez.
+
 ## UI katmanı
+
+### `ArchiveQuery`, `ArchiveFetcher` ve saf arşiv durumu
+
+`roadvision.archive` arşiv filtrelerini, allowlist'li sort ifadelerini,
+ASC/DESC ve NULL-aware keyset imleçlerini Tk'den bağımsız tutar. Liste ve
+tür-facet sayımları aynı FROM/WHERE sözleşmesini paylaşır; görüntü filtresi
+yalnız `detection_events.capture_id` değerine değil, yaşayan
+`media_captures` satırına bakar. DB fonksiyonları açık bağlantı alır ve
+transaction yönetmez.
+
+`ArchiveFetcher` bağlantının tek sahibidir. Tür ağacı ve sonuç yenilemesi
+ayrı nesiller taşır; page + isteğe bağlı counts tek refresh revision'ında,
+aynı `REPEATABLE READ, READ ONLY` transaction'da çalışır. Bekleyen işler
+sınırsız queue yerine tür başına latest slotta birleştirilir. Worker yalnız
+sınırlı sonuç kanalına yazar; Tk veya journal callback'i çağırmaz.
+
+`TypeSelectionModel`, `PaginationState` ve `ArchiveState` üç durumlu seçim,
+request-cursor geçmişi ve draft/applied filtre durumunu widget'lardan ayırır.
+Bu sayede arşivin yarış ve gezinme kuralları grafik ortam olmadan test
+edilebilir.
+
+### `ArchivePage`
+
+Sağ Notebook'taki üçüncü sekmedir. Filtre ağacı ve sonuç tablosu bir
+`Panedwindow` içinde yer alır; sonuçta yatay/dikey scrollbar bulunur.
+Değişiklikler iptal edilebilir Tk debounce ile tek refresh'e indirgenir.
+Sekme ilk kez görünür olduğunda önce tür ağacı, sonra varsayılan son-24-saat
+sorgusu istenir. Worker sonuçları mevcut 33 ms UI polling turunda ve yalnız
+Tk ana thread'inde uygulanır.
 
 ### `RoadVisionApp`
 
-Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme, durum bilgisi ve oturum günlüğünü yönetir. Sağ içerik alanı **Canlı Önizleme** ve **Oturum Günlüğü** sekmelerine ayrılır. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme,
+durum bilgisi, oturum günlüğü ve arşiv entegrasyonunu yönetir. Sağ içerik
+alanı **Canlı Önizleme**, **Oturum Günlüğü** ve **Tespit Arşivi** sekmelerine
+ayrılır. Kamera taraması UI'ı bloklamamak için ayrı kısa ömürlü bir thread'de
+yapılır. Engine olayları `queue.Queue` ile ana thread'e taşınır; yalnızca Tk
+ana thread'i widget ve `PhotoImage` nesnelerine dokunur.
+
+`RoadVisionApp` hem oturum satırlarının hem arşiv satırlarının kullandığı
+ortak snapshot controller'ının sahibidir; alt sayfalar
+`SnapshotViewerWindow` sınıfını import etmez.
 
 `SessionLogSink` journal yazıcı thread'inde Tk nesnelerine dokunmaz. UI'ın mevcut 33 ms polling döngüsü bekleyen `LogRecord` nesnelerini ana thread'de tabloya aktarır. Oturum kuyruğu son 2.000, görünür tablo son 1.000 kaydı tutar; bu sınırlar uzun video/kamera çalışmalarında belleğin sınırsız büyümesini engeller.
 
@@ -130,5 +178,9 @@ Kaynak seçimi, kamera taraması, model seçimleri, güven eşiği, önizleme, d
 - Kaynak hazırlama ya da inference hatası `error` olayına çevrilir.
 - Kamera/video handle'ları hem normal bitişte hem durdurmada serbest bırakılır.
 - Uygulama kapanırken run worker'ları durdurulur, medya kuyruğu drain/release edilir, ardından model cache'i temizlenir.
-- `shutdown_complete` olayı işlendiğinde journal kuyruğu boşaltılır, sink'ler flush edilip serbest bırakılır ve ardından Tk penceresi kapatılır.
+- Kapanış başlarken snapshot/arşiv fetcher'ları yeni istek kabulünü ve
+  bekleyen işleri anında keser; Tk thread'i çalışan DB sorgusunu beklemez.
+- `shutdown_complete` olayı işlendiğinde fetcher'lara kısa bir bounded join
+  verilir; ardından journal kuyruğu boşaltılır, sink'ler flush edilip serbest
+  bırakılır ve Tk penceresi kapatılır.
 - Model dosyaları iş başlamadan registry üzerinden doğrulanır.
