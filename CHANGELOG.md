@@ -4,6 +4,19 @@
 
 ### Eklendi
 
+- PyQt6 tabanlı yeni arayüz (`roadvision/qt/`, "RoadVision Arayüz v2"
+  tasarımı): ikon raylı 4 sayfa (Canlı Önizleme, Çalışma Özeti, Oturum
+  Günlüğü, Tespit Arşivi), QGraphicsView üzerinde zoom/pan destekli
+  önizleme (BGR kare renk dönüşümü ve PIL olmadan `Format_BGR888` ile
+  çizilir), sparkline'lı telemetri kartları, model kartlarında model
+  rengiyle güven kaydırağı, QTableView tabanlı günlük ve ayrıntı
+  çekmecesi, arşiv sayfasının aynı `ArchiveState`/keyset akışıyla Qt
+  portu, İşaretli/Orijinal/Yan yana görünümlü tespit görüntüsü diyaloğu
+  ve CSV/JSONL çalışma özeti dışa aktarımı. Motor sözleşmeleri değişmedi:
+  aynı olay kuyruğu, 33 ms tek kalp atışı, run-id filtresi ve iki fazlı
+  kapanış. `ROADVISION_UI=tk` eski Tk arayüzünü seçer; PyQt6 kurulu
+  değilse giriş noktası kendiliğinden Tk'ye döner.
+
 - `models.json` kataloğuna isteğe bağlı `sha256` alanı: ağırlık dosyası
   YOLO'ya (dolayısıyla pickle'a) verilmeden önce doğrulanır; `git lfs pull`
   çalıştırılmamış klonlardaki LFS işaretçileri kafa karıştırıcı torch hatası

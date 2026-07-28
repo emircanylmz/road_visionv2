@@ -21,6 +21,14 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
+Varsayılan arayüz PyQt6 tabanlı v2 tasarımıdır (`roadvision/qt/`). PyQt6
+kurulu değilse uygulama uyarı basarak eski Tkinter arayüzüne döner; Tk
+arayüzünü açıkça seçmek için:
+
+```bash
+ROADVISION_UI=tk python3 app.py
+```
+
 ## JSON model kataloğu
 
 Uygulamadaki modeller [models.json](models.json) dosyasından yüklenir. Model ağırlığını güncellemek için Python kodunu değiştirmek gerekmez; ilgili `weights` değerini değiştirip uygulamayı yeniden başlatmak yeterlidir.
