@@ -1,7 +1,7 @@
 # RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
 
-Durum: **Faz 0–1 tamamlandı; Faz 2 sırada**
-Revizyon: 29 Temmuz 2026 (r3 — Faz 1 tamamlandı)
+Durum: **Faz 0–2 tamamlandı; Faz 3 sırada**
+Revizyon: 29 Temmuz 2026 (r5 — Faz 2 tamamlandı)
 
 ## 1. Amaç ve kapsam
 
@@ -57,7 +57,7 @@ gerekçelerini kaydeder (bkz. MEDYA_TASARIM_PLANI.md §2 ile aynı disiplin).
 Tarayıcı (React SPA)
    │ HTTPS, HttpOnly session cookie
    ▼
-nginx  ── statik SPA + /api reverse proxy        (Faz 2'de eklenir)
+nginx  ── statik SPA + /api reverse proxy        (Faz 2)
    ▼
 FastAPI (web/app)  ── psycopg3 AsyncConnectionPool
    │ rol: roadvision_web
@@ -73,7 +73,7 @@ PostgreSQL 17 (mevcut compose servisi)
 | DB erişimi | psycopg3 + psycopg_pool | Masaüstüyle aynı sürücü; `roadvision.archive` filtre/keyset üreticileri yeniden kullanılabilir |
 | Web migration | Sürüm-kapılı SQL runner (§2/1) | Masaüstü `ensure_schema` deseniyle bire bir aynı disiplin |
 | Frontend | React 18 + TypeScript + Vite | Yoğun etkileşimli arşiv/doğrulama ekranları |
-| Veri çekme | TanStack Query + TanStack Table | Keyset sayfalama, aralıklı yenileme, sıralanabilir kolonlar |
+| Veri çekme | TanStack Query + semantik HTML tabloları | Keyset sayfalama ve aralıklı yenileme; Faz 2'nin sabit kolonlarında ek tablo bağımlılığı yok |
 | Stil | Tailwind CSS | Hız; masaüstü v2 temasının renkleri değişkenlere taşınır |
 | Kimlik | HttpOnly cookie + DB-backed session, Argon2id | Dahili panel için JWT'den basit ve anında iptal edilebilir |
 | Dağıtım | Mevcut compose'a `api` (+Faz 2'de `nginx`) | Postgres zaten compose'ta |
@@ -373,6 +373,7 @@ masaüstü arşivindeki keyset sözleşmesini kullanır: `cursor` + `limit`,
 | `/admin/audit` | GET | Denetim kayıtları (audit_id keyset) | 1 |
 | `/logs` | GET | level/category/model/run/zaman filtreli keyset liste | 2 |
 | `/logs/{id}` | GET | Tek kayıt + `payload` JSON | 2 |
+| `/meta/models` | GET | Şema v3 model kataloğu (arayüz filtreleri için) | 2 |
 | `/archive/types` | GET | Model → tür ağacı + sayımlar | 3 |
 | `/archive/detections` | GET | Masaüstü filtre sözleşmesi + `review_status` filtresi (`unreviewed/correct/corrected/wrong`) | 3 |
 | `/captures/{capture_id}` | GET | Orijinal+işaretli medya kimlikleri, frame boyutu | 3 |
@@ -468,8 +469,40 @@ geçişi yarışı, audit, rol yalıtımı, aktif oturum listesi ve devre dış�
 bırakmada anlık oturum iptalini gerçek HTTP istekleriyle PASS olarak
 doğruladı. API ve PostgreSQL konteynerleri sağlıklı kaldı.
 
-**Faz 2 — Log görüntüleyici + nginx/SPA temeli.** Kabul: 100k kayıtta
-sayfa yanıtı < 100 ms (keyset + mevcut `idx_log_records_*` indeksleri).
+**Faz 2 — Log görüntüleyici + nginx/SPA temeli** *(29 Temmuz 2026'da
+tamamlandı)* — `logquery.py` saf sorgu üreticisi (masaüstü `archive`
+disiplini: allowlist'li sıralama, `(ts,id)` keyset, DB'siz test);
+`/api/logs`, `/api/logs/{id}`, `/api/meta/models` uçları; React 18 +
+TypeScript + Vite + Tailwind v4 + TanStack Query SPA'sı — giriş/kayıt,
+ikon-raylı kabuk, seviye çipleri ve taslak/uygula filtreli Loglar sayfası
+(payload çekmecesiyle), Üyeler/Oturumlar/Denetim sekmeli Yönetim sayfası;
+tasarım token'ları `roadvision/qt/theme.py`'den birebir taşınır. nginx,
+SPA'yı sunar ve `/api`'yi proxy'ler; api imajı `--proxy-headers` ile gerçek
+istemci IP'sini alır (`FORWARDED_ALLOW_IPS`). TLS örneği `nginx.conf`
+içinde yorumludur; sertifika kuruluma özgüdür ve TLS açıldığında
+`ROADVISION_WEB_COOKIE_SECURE=true` yapılır. `package-lock.json`
+depodadır; imaj derlemesi sürümleri kilitten okuyan `npm ci` ile
+deterministiktir. İstemci yönlendirmesi, üretim bağımlılığı güvenlik
+denetimini temiz tutan küçük bir History API yönlendiricisiyle sağlanır.
+Kabul: (a) 100k+ kayıtta filtreli ve filtresiz keyset sayfalamada p95
+< 100 ms; (b) sayfalar arasında id tekrarı/atlaması yok, `(ts,id)`
+sıralaması monoton; (c) seviye filtresi yalnız istenen seviyeleri döndürür
+ve `has_payload` işaretli kaydın ayrıntısı payload ile gelir; (d) nginx
+SPA kökünü sunar ve `/api` proxy'si çalışır — hepsi `verify_faz2.py` ile
+makinede doğrulanır (`--seed`, sahip DSN'iyle `faz2-seed` damgalı sentetik
+kayıt ekler; `--cleanup-seed` siler); (e) `npm run build` strict tsc ile
+üretim çıktısı verir.
+
+Kabul sonucu: web birim testleri 38/38, masaüstü regresyon paketi 255/255
+ve strict TypeScript üretim derlemesi geçti; üretim bağımlılık denetimi
+0 açık verdi. Gerçek PostgreSQL tablosu 99.629 geri alınabilir sentetik
+kayıtla 100.000 satıra tamamlandı. Filtresiz 30 sayfada p95 9,4 ms,
+`warning+error` filtresinde p95 34,8 ms ölçüldü; `(ts,id)` sırası,
+tekrarsız keyset akışı, model kataloğu ve payload ayrıntısı doğrulandı.
+Sentetik kayıtlar kabulden sonra silindi. API/PostgreSQL/nginx konteynerleri
+sağlıklı kaldı; nginx kökü, `/api` proxy'si ve güvenlik başlıkları ile
+gerçek tarayıcıda giriş, seviye filtresi, log ayrıntısı, yönetim ve çıkış
+akışları konsol hatası olmadan tamamlandı.
 
 **Faz 3 — Arşiv.** Kabul: masaüstü Tespit Arşivi ile aynı filtre
 kümesinde aynı satırlar; görüntü uçları ETag ile 304 döndürür.

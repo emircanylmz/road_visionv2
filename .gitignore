@@ -225,3 +225,7 @@ exports/
 
 # Yerel PostgreSQL yedekleri (veri/kimlik bilgisi içerebilir)
 backups/
+
+# Web paneli SPA (Faz 2)
+web/frontend/node_modules/
+web/frontend/dist/

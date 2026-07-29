@@ -1,4 +1,4 @@
-# RoadVision Web API bağımlılıkları (Faz 0–1)
+# RoadVision Web API bağımlılıkları (Faz 0–2)
 # Sabitleme yaklaşımı kök requirements.txt ile aynıdır: majör üst sınırlı.
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1

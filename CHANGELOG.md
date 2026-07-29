@@ -4,6 +4,16 @@
 
 ### Eklendi
 
+- Web paneli Faz 2 (RVU-0004): `(ts,id)` keyset imleçli, seviye/kategori/
+  model/run/zaman filtreli `/api/logs` + `/api/logs/{id}` + `/api/meta/models`
+  uçları ve DB'siz test edilen saf `logquery` üreticisi; masaüstü v2 tasarım
+  token'larını taşıyan React+TypeScript SPA (giriş/kayıt, ikon-raylı kabuk,
+  payload çekmeceli Loglar sayfası, Üyeler/Oturumlar/Denetim sekmeli Yönetim
+  sayfası); SPA'yı sunup `/api`'yi proxy'leyen nginx compose servisi
+  (127.0.0.1:8080) ve api imajında `--proxy-headers`; 100k kayıt kabulünü
+  seed/ölçüm/temizlikle kanıtlayan `verify_faz2.py`. Masaüstü kodu ve
+  `public` şeması değişmedi (`--seed` yalnız isteğe bağlı ve sahip DSN'iyle
+  sentetik `faz2-seed` kayıtları ekler).
 - Web paneli Faz 1 (RVU-0004): webapp şema v1 (`users`, `sessions`,
   `admin_audit`), Argon2id + zamanlama-eşitlemeli giriş, oturuma bağlı
   double-submit CSRF (`X-RoadVision-CSRF`), IP+e-posta bazlı giriş oran
@@ -36,13 +46,34 @@
 - Web bootstrap parola aktarımı `psql \gset` ile sessizleştirildi; rol
   parolası terminal veya CI çıktısına yazılmıyor. Bu davranış regresyon
   testiyle korunuyor.
+- Faz 2 log sayfalaması bir fazla satır okuyarak tam dolu son sayfada
+  sahte `next_cursor` üretmiyor; bozuk/naif zamanlı imleçler ve UTC ofsetsiz
+  zaman filtreleri reddediliyor. Model kataloğu yokluğu transaction'ı hata
+  durumuna düşürmeden `to_regclass` ile belirleniyor.
+- Faz 2 kabul betiğinin PostgreSQL modulo ifadeleri psycopg yer tutucu
+  ayrıştırmasına uygun hale getirildi; p95 hesabı en yakın-rank yöntemiyle
+  yapılıyor, ağ/seed hataları kontrollü FAIL üretiyor ve kabul oturumu
+  çıkışta kapatılıyor.
+- React Router'ın birbiriyle çakışan güvenlik duyurularına maruz sürümleri
+  yerine küçük bir History API yönlendiricisi kullanıldı. Eksik
+  `package-lock.json` üretildi; üretim bağımlılığı denetimi sıfır açıkla
+  tamamlandı.
+- nginx için CSP, frame, MIME-sniffing, referrer ve cross-origin opener
+  başlıkları, kapalı sürüm imzası ve 1 MiB istek gövdesi sınırı eklendi.
 
 ### Doğrulama
 
-- Web birim testleri 28/28, masaüstü regresyon testleri 255/255 geçti.
+- Web birim testleri 38/38, masaüstü regresyon testleri 255/255 geçti.
 - PostgreSQL şemaları `webapp=1` ve `public=3` olarak doğrulandı; Faz 1
   HTTP kabul betiği kayıt/onay, CSRF, audit, rol ve oturum iptal akışlarını
   çalışan API üzerinde PASS sonucu ile tamamladı.
+- Faz 2 kabulü 100.000 kayıtta 30'ar filtreli/filtresiz keyset sayfasını
+  yineleme olmadan gezdi; p95 sırasıyla 9,4 ms ve 34,8 ms ölçüldü. Seed
+  edilen 99.629 kayıt kabulden sonra temizlendi.
+- Frontend strict TypeScript üretim derlemesi ve `npm audit --omit=dev`
+  geçti (0 açık). nginx SPA/proxy/güvenlik başlıkları ile gerçek tarayıcıda
+  giriş, log filtresi, payload ayrıntısı, yönetim ve çıkış akışları
+  doğrulandı; tarayıcı konsolunda hata veya uyarı oluşmadı.
 
 ## [2.0.1] - 2026-07-29
 

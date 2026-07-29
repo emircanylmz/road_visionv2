@@ -3,8 +3,9 @@
 Masaüstü uygulamanın PostgreSQL'e yazdığı günlük, tespit ve görüntüleri
 sunan; tespit doğrulama ve dataset üretimini yöneten ayrı web servisi.
 Tasarım sözleşmesi: [../WEB_PLANI.md](../WEB_PLANI.md). Bu klasör şu an
-**Faz 0 + Faz 1** kapsamını içerir: DB temeli, migration runner'ı,
-kimlik/oturum katmanı ve yönetici onay akışı.
+**Faz 0–2** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
+oturum katmanı, yönetici onay akışı, log görüntüleyici API'si ve nginx
+arkasında sunulan React SPA.
 
 ## Kurulum — compose ile (önerilen)
 
@@ -29,6 +30,34 @@ pip install -r web/requirements.txt
 ./web/scripts/bootstrap_db.sh
 export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roadvision"
 uvicorn app.main:app --app-dir web --reload --port 8800
+```
+
+## Faz 2 — log görüntüleyici ve SPA
+
+Compose ile: `docker compose up -d --build api frontend` → panel
+`http://127.0.0.1:8080` (nginx, SPA + `/api` proxy). Geliştirmede:
+
+```bash
+cd web/frontend
+npm ci             # sürümler package-lock.json'dan; bağımlılık değişince lock'u birlikte commit edin
+npm audit --omit=dev
+npm run dev        # http://127.0.0.1:5173, /api → 127.0.0.1:8800 proxy
+```
+
+Uçlar: `GET /api/logs` (level/category/model_id/run_id/ts_from/ts_to,
+`cursor` keyset, `limit≤500`, `order=asc|desc`), `GET /api/logs/{id}`
+(payload dahil), `GET /api/meta/models`.
+SPA'nın küçük History API yönlendiricisi bağımlılıksızdır; nginx tüm
+uygulama yollarını `index.html`e geri düşürür.
+
+Faz 2 kabulü (100k kayıt + p95 gecikme + keyset doğruluğu + nginx):
+
+```bash
+ROADVISION_WEB_ADMIN_EMAIL=... ROADVISION_WEB_ADMIN_PASSWORD=... \
+ROADVISION_WEB_DSN=... ROADVISION_DB_DSN=... \
+ROADVISION_WEB_HTTP_URL=http://127.0.0.1:8080 \
+python3 web/scripts/verify_faz2.py --seed
+# sentetik kayıtları geri almak için: --cleanup-seed
 ```
 
 ## Faz 1 — kimlik ve yönetici
@@ -79,4 +108,7 @@ python3 -m unittest discover -s web/tests -t web -v
 - Parolalar `.env` dosyasındadır ve komut satırına yazılmaz;
   `bootstrap_db.sh` parolayı psql değişkeni olarak aktarır.
 - API konteyneri yalnız `127.0.0.1:8800`e yayınlanır; dış erişim Faz 2'de
-  nginx + TLS ile açılacaktır.
+  nginx üzerinden sağlanır. Uzak erişimde nginx TLS yapılandırması
+  etkinleştirilmeli ve `ROADVISION_WEB_COOKIE_SECURE=true` yapılmalıdır.
+- nginx varsayılanı CSP, clickjacking/MIME-sniffing/referrer/COOP
+  başlıklarını ve 1 MiB istek gövdesi sınırını uygular.

@@ -27,7 +27,7 @@ services:
       start_period: 10s
     stop_grace_period: 30s
 
-  # RoadVision Web API (Faz 0–1; bkz. WEB_PLANI.md).
+  # RoadVision Web API (Faz 0–2; bkz. WEB_PLANI.md).
   # Yalnız salt-okunur roadvision_web rolünü bilir; masaüstünün sahip
   # DSN'i bu servise verilmez.
   api:
@@ -35,6 +35,10 @@ services:
     restart: unless-stopped
     environment:
       ROADVISION_WEB_DSN: postgresql://roadvision_web:${ROADVISION_WEB_PASSWORD:?ROADVISION_WEB_PASSWORD .env içinde tanımlanmalı}@postgres:5432/${POSTGRES_DB:-roadvision}
+      # nginx'in X-Forwarded-For başlığına güvenilecek proxy adresleri.
+      # api yalnız compose ağı ve 127.0.0.1'e bağlı olduğundan varsayılan "*"
+      # kabul edilebilir; sıkılaştırmak için compose alt ağı verilebilir.
+      FORWARDED_ALLOW_IPS: ${ROADVISION_WEB_FORWARDED_ALLOW_IPS:-*}
     ports:
       - "127.0.0.1:${ROADVISION_WEB_PORT:-8800}:8000"
     depends_on:
@@ -50,6 +54,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # RoadVision Web Paneli SPA + reverse proxy (Faz 2; bkz. WEB_PLANI.md §3).
+  frontend:
+    build: ./web/frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ROADVISION_WEB_HTTP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1/
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   roadvision_postgres_data:
