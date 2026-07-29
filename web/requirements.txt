@@ -1,9 +1,10 @@
-# RoadVision Web API bağımlılıkları (Faz 0)
+# RoadVision Web API bağımlılıkları (Faz 0–1)
 # Sabitleme yaklaşımı kök requirements.txt ile aynıdır: majör üst sınırlı.
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 psycopg[binary,pool]>=3.1,<4
 pydantic-settings>=2.4,<3
+email-validator>=2,<3
 
-# Faz 1'de kullanılacak; sürüm şimdiden sabitlendi (WEB_PLANI.md §8):
+# Kimlik (Faz 1, WEB_PLANI.md §8):
 argon2-cffi>=23.1,<24

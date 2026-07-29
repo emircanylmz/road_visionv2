@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app.migrations import (
+    CURRENT_VERSION,
     MIGRATIONS,
     SCHEMA_MISSING_HINT,
     WEBAPP_ADVISORY_LOCK,
@@ -66,11 +67,23 @@ def _sql_list(conn: FakeConnection) -> list[str]:
 
 
 class EnsureWebappSchemaTests(unittest.TestCase):
-    def test_faz0_migration_listesi_bos_ve_surum_sifir(self):
-        # Faz 0 sözleşmesi: içerik migration'ları Faz 1 ile gelir.
-        self.assertEqual(MIGRATIONS, ())
-        conn = FakeConnection(fetch_results=[(1,), (0,)])
-        self.assertEqual(ensure_webapp_schema(conn), 0)
+    def test_migration_listesi_v1_ile_baslar_ve_ardisiktir(self):
+        versions = [version for version, _sql in MIGRATIONS]
+        self.assertEqual(versions, list(range(1, len(versions) + 1)))
+        self.assertEqual(CURRENT_VERSION, versions[-1])
+
+    def test_v1_kimlik_tablolarini_icerir(self):
+        sql = dict(MIGRATIONS)[1]
+        for parca in (
+            "CREATE TABLE webapp.users",
+            "CREATE TABLE webapp.sessions",
+            "CREATE TABLE webapp.admin_audit",
+            "csrf_token",
+            "last_seen_at",
+            "users_email_lower_uq",
+            "'pending', 'approved', 'rejected', 'disabled'",
+        ):
+            self.assertIn(parca, sql)
 
     def test_kilit_ilk_komut_ve_dogru_sabitle_alinir(self):
         conn = FakeConnection(fetch_results=[(1,), (0,)])

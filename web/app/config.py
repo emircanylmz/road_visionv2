@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     pool_min: int = 1
     pool_max: int = 4
 
+    # Faz 1 — kimlik (WEB_PLANI.md §8). cookie_secure varsayılanı yereldeki
+    # http geliştirme için False'tur; Faz 2'de nginx+TLS arkasında True
+    # yapılmalıdır. API zaten yalnız 127.0.0.1'e yayınlanır.
+    cookie_secure: bool = False
+    session_ttl_hours: int = 12
+    session_idle_minutes: int = 30
+    login_rate_per_minute: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:

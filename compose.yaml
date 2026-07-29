@@ -27,7 +27,7 @@ services:
       start_period: 10s
     stop_grace_period: 30s
 
-  # RoadVision Web API (Faz 0 iskeleti; bkz. WEB_PLANI.md).
+  # RoadVision Web API (Faz 0–1; bkz. WEB_PLANI.md).
   # Yalnız salt-okunur roadvision_web rolünü bilir; masaüstünün sahip
   # DSN'i bu servise verilmez.
   api:

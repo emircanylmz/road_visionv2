@@ -27,9 +27,55 @@ SCHEMA_MISSING_HINT = (
 
 Migration = tuple[int, str]
 
-# Faz 0 yalnız altyapıyı kurar; ilk içerik migration'ları Faz 1 ile gelir
-# (v1: users/sessions/admin_audit — bkz. WEB_PLANI.md §4.7 tablosu).
-MIGRATIONS: tuple[Migration, ...] = ()
+# v1 — kimlik ve denetim (WEB_PLANI.md §4.2, Faz 1).
+# sessions.csrf_token: oturuma bağlı double-submit CSRF belirteci (§8);
+# sessions.last_seen_at: 30 dk hareketsizlik süresi için son etkinlik izi.
+_MIGRATION_V1_KIMLIK = """\
+CREATE TABLE webapp.users (
+    user_id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email         TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    full_name     TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'member'
+                  CHECK (role IN ('member', 'admin')),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'approved', 'rejected', 'disabled')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_at   TIMESTAMPTZ,
+    approved_by   BIGINT REFERENCES webapp.users(user_id)
+);
+
+CREATE UNIQUE INDEX users_email_lower_uq ON webapp.users (lower(email));
+
+CREATE TABLE webapp.sessions (
+    session_id   UUID PRIMARY KEY,
+    user_id      BIGINT NOT NULL
+                 REFERENCES webapp.users(user_id) ON DELETE CASCADE,
+    csrf_token   TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ip           INET,
+    user_agent   TEXT
+);
+
+CREATE INDEX sessions_user_idx ON webapp.sessions (user_id, expires_at);
+
+CREATE TABLE webapp.admin_audit (
+    audit_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    actor_id   BIGINT NOT NULL REFERENCES webapp.users(user_id),
+    action     TEXT NOT NULL,
+    target     TEXT NOT NULL,
+    detail     JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX admin_audit_created_idx ON webapp.admin_audit (created_at);
+"""
+
+MIGRATIONS: tuple[Migration, ...] = (
+    (1, _MIGRATION_V1_KIMLIK),
+)
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0] if MIGRATIONS else 0
 

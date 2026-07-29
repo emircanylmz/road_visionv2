@@ -3,7 +3,8 @@
 Masaüstü uygulamanın PostgreSQL'e yazdığı günlük, tespit ve görüntüleri
 sunan; tespit doğrulama ve dataset üretimini yöneten ayrı web servisi.
 Tasarım sözleşmesi: [../WEB_PLANI.md](../WEB_PLANI.md). Bu klasör şu an
-**Faz 0** kapsamını içerir: DB temeli, migration runner'ı ve API iskeleti.
+**Faz 0 + Faz 1** kapsamını içerir: DB temeli, migration runner'ı,
+kimlik/oturum katmanı ve yönetici onay akışı.
 
 ## Kurulum — compose ile (önerilen)
 
@@ -28,6 +29,31 @@ pip install -r web/requirements.txt
 ./web/scripts/bootstrap_db.sh
 export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roadvision"
 uvicorn app.main:app --app-dir web --reload --port 8800
+```
+
+## Faz 1 — kimlik ve yönetici
+
+İlk yönetici (parola etkileşimli sorulur; komut satırına yazılmaz):
+
+```bash
+export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roadvision"
+python3 web/scripts/create_admin.py admin@kurum.tr --full-name "Saha Yöneticisi"
+```
+
+Uç özeti (tam sözleşme: WEB_PLANI.md §6): `POST /api/auth/register|login|logout`,
+`GET /api/auth/me`; yönetici: `GET /api/admin/users?status=`,
+`POST /api/admin/users/{id}/approve|reject|disable`,
+`GET /api/admin/sessions`, `DELETE /api/admin/sessions/{id}`,
+`GET /api/admin/audit`.
+Durum değiştiren istekler `rv_csrf` çerezindeki değeri
+`X-RoadVision-CSRF` başlığında geri göndermelidir.
+
+Faz 1 kabulü (çalışan API + yönetici hesabı gerekir):
+
+```bash
+ROADVISION_WEB_ADMIN_EMAIL=admin@kurum.tr \
+ROADVISION_WEB_ADMIN_PASSWORD=... \
+python3 web/scripts/verify_faz1.py
 ```
 
 ## Faz 0 kabul doğrulaması

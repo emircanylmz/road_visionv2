@@ -4,6 +4,15 @@
 
 ### Eklendi
 
+- Web paneli Faz 1 (RVU-0004): webapp şema v1 (`users`, `sessions`,
+  `admin_audit`), Argon2id + zamanlama-eşitlemeli giriş, oturuma bağlı
+  double-submit CSRF (`X-RoadVision-CSRF`), IP+e-posta bazlı giriş oran
+  sınırı, yönetici onay/ret/devre dışı akışı (durum geçişi UPDATE..WHERE
+  ile yarış-güvenli, oturum iptali ve audit ile tek transaction),
+  `/api/auth/*` ve `/api/admin/*` uçları, tek biçim hata gövdesi
+  `{"error":{code,message}}`, `create_admin.py` ve HTTP kabul betiği
+  `verify_faz1.py`; web birim testleri (argon2 yoksa özet testleri zarifçe
+  atlanır). Masaüstü kodu ve `public` şeması değişmedi.
 - Web paneli Faz 0 (RVU-0004, bkz. [WEB_PLANI.md](WEB_PLANI.md)): salt-okunur
   `roadvision_web` DB rolü ve `webapp` şeması için tekrar çalıştırılabilir
   bootstrap (`web/db/bootstrap.sql` + compose initdb kancası), masaüstü
@@ -16,9 +25,24 @@
 
 ### Düzeltildi
 
+- Faz 1 kabul verileri `EmailStr` tarafından reddedilen ayrılmış
+  `.invalid`/`.local` alanlarından geçerli alanlara taşındı;
+  `create_admin.py` giriş yapılamayan hesap üretmemek için e-postayı
+  doğrulayıp normalize ediyor ve kayıt API'si yalnız boşluktan oluşan
+  görünen adları reddediyor. İlk yönetici ile API kaydı aynı 10–200
+  karakter parola sınırını kullanıyor.
+- Yönetici aktif oturum listesi mutlak sürenin yanında yapılandırılmış
+  hareketsizlik süresini de uygular.
 - Web bootstrap parola aktarımı `psql \gset` ile sessizleştirildi; rol
   parolası terminal veya CI çıktısına yazılmıyor. Bu davranış regresyon
   testiyle korunuyor.
+
+### Doğrulama
+
+- Web birim testleri 28/28, masaüstü regresyon testleri 255/255 geçti.
+- PostgreSQL şemaları `webapp=1` ve `public=3` olarak doğrulandı; Faz 1
+  HTTP kabul betiği kayıt/onay, CSRF, audit, rol ve oturum iptal akışlarını
+  çalışan API üzerinde PASS sonucu ile tamamladı.
 
 ## [2.0.1] - 2026-07-29
 

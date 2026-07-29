@@ -1,7 +1,7 @@
 # RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
 
-Durum: **plan onaylandı; Faz 0 tamamlandı**
-Revizyon: 29 Temmuz 2026
+Durum: **Faz 0–1 tamamlandı; Faz 2 sırada**
+Revizyon: 29 Temmuz 2026 (r3 — Faz 1 tamamlandı)
 
 ## 1. Amaç ve kapsam
 
@@ -116,12 +116,15 @@ CREATE TABLE webapp.users (
 CREATE UNIQUE INDEX users_email_lower_uq ON webapp.users (lower(email));
 
 CREATE TABLE webapp.sessions (
-    session_id UUID PRIMARY KEY,
-    user_id    BIGINT NOT NULL REFERENCES webapp.users(user_id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    ip         INET,
-    user_agent TEXT
+    session_id   UUID PRIMARY KEY,
+    user_id      BIGINT NOT NULL
+                 REFERENCES webapp.users(user_id) ON DELETE CASCADE,
+    csrf_token   TEXT NOT NULL,       -- oturuma bağlı double-submit belirteci (§8)
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,          -- mutlak 12 saat
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 30 dk hareketsizlik izi
+    ip           INET,
+    user_agent   TEXT
 );
 CREATE INDEX sessions_user_idx ON webapp.sessions (user_id, expires_at);
 
@@ -365,7 +368,9 @@ masaüstü arşivindeki keyset sözleşmesini kullanır: `cursor` + `limit`,
 | `/auth/me` | GET | Aktif kullanıcı | 1 |
 | `/admin/users` | GET | Duruma göre kullanıcı listesi | 1 |
 | `/admin/users/{id}/approve|reject|disable` | POST | Onay akışı + audit | 1 |
-| `/admin/sessions/{id}` | DELETE | Oturum iptali | 1 |
+| `/admin/sessions` | GET | Aktif oturum listesi | 1 |
+| `/admin/sessions/{id}` | DELETE | Oturum iptali + audit | 1 |
+| `/admin/audit` | GET | Denetim kayıtları (audit_id keyset) | 1 |
 | `/logs` | GET | level/category/model/run/zaman filtreli keyset liste | 2 |
 | `/logs/{id}` | GET | Tek kayıt + `payload` JSON | 2 |
 | `/archive/types` | GET | Model → tür ağacı + sayımlar | 3 |
@@ -443,9 +448,25 @@ işlemlerinin reddedildiği ve `webapp` şemasına yazabildiği PostgreSQL 17.10
 konteynerleri sağlıklı çalışırken `/healthz`, `public=3` ve `webapp=0`
 sürümlerini döndürdü.
 
-**Faz 1 — Kimlik ve yönetici** — webapp v1; kayıt/giriş/onay, admin sayfası,
-`create_admin.py`. Kabul: onaysız kullanıcı hiçbir korumalı uca erişemez;
-onay/ret audit'e düşer.
+**Faz 1 — Kimlik ve yönetici** *(29 Temmuz 2026'da tamamlandı)* — webapp v1
+migration'ı (users/sessions/admin_audit); Argon2id + zamanlama-eşitlemeli
+giriş; oturuma bağlı CSRF (double-submit, `X-RoadVision-CSRF`); IP+e-posta
+bazlı giriş oran sınırı; onay/ret/devre dışı akışı (geçiş kuralları hem saf
+fonksiyonda hem UPDATE..WHERE'de); devre dışı bırakmada oturum iptaliyle tek
+transaction'da audit; `create_admin.py` (parola getpass/ortamdan, komut
+satırından asla) ve HTTP kabul betiği `verify_faz1.py`.
+Kabul: (a) onaysız kullanıcı hiçbir korumalı uca erişemez ve onaysız giriş
+403 `pending_approval` döner; (b) onay/ret/devre dışı `admin_audit`e düşer;
+(c) CSRF başlıksız durum-değiştiren istek 403 alır; (d) devre dışı bırakılan
+kullanıcının açık oturumu anında geçersizdir — dördü de `verify_faz1.py`
+ile makinede doğrulanır.
+
+Kabul sonucu: web birim testleri 28/28, masaüstü regresyon paketi 255/255
+geçti. Çalışan PostgreSQL üzerinde `webapp=1`, `public=3` korundu;
+`verify_faz1.py` kayıt, onaysız giriş, yönetici onayı, CSRF reddi, durum
+geçişi yarışı, audit, rol yalıtımı, aktif oturum listesi ve devre dışı
+bırakmada anlık oturum iptalini gerçek HTTP istekleriyle PASS olarak
+doğruladı. API ve PostgreSQL konteynerleri sağlıklı kaldı.
 
 **Faz 2 — Log görüntüleyici + nginx/SPA temeli.** Kabul: 100k kayıtta
 sayfa yanıtı < 100 ms (keyset + mevcut `idx_log_records_*` indeksleri).
