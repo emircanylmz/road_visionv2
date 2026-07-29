@@ -2,8 +2,19 @@
 
 ## [Yayımlanmadı]
 
+## [2.0.1] - 2026-07-29
+
 ### Eklendi
 
+- Başlangıçta seçili modeller `models_ready_event` açılmadan önce hazırlanır;
+  CUDA modelleri sentetik kareyle ısındırılarak kernel/cuDNN ilk çağrı
+  maliyeti gerçek akıştan önce ödenir. Hazırlık hataları hiçbir gerçek kare
+  işlenmeden açık bir motor hatasına dönüştürülür.
+- Jetson CSI kameraları için `GStreamerCameraSource`, hazır
+  `nvarguscamerasrc` pipeline kurucusu ve PyQt/Tk kamera listesine
+  `ROADVISION_CSI_SENSORS` üzerinden sensör ekleme desteği eklendi.
+  `appsink drop=1 max-buffers=1`, motorun latest-frame ilkesini GStreamer
+  tarafında da korur.
 - PyQt6 tabanlı yeni arayüz (`roadvision/qt/`, "RoadVision Arayüz v2"
   tasarımı): ikon raylı 4 sayfa (Canlı Önizleme, Çalışma Özeti, Oturum
   Günlüğü, Tespit Arşivi), QGraphicsView üzerinde zoom/pan destekli
@@ -29,6 +40,12 @@
 
 ### Değiştirildi
 
+- CUDA üzerinde `torchvision::nms` bulunamadığında çalışma CPU'ya sessizce
+  düşmek yerine Jetson/NVIDIA Torch-Torchvision kurulum yönlendirmesiyle
+  durur; MPS fallback davranışı değişmedi.
+- Linux/V4L2 kameralarında çözünürlükten önce varsayılan MJPG formatı istenir.
+  `ROADVISION_CAMERA_FOURCC` başka bir dört karakterlik formatı zorlayabilir
+  veya boş değerle isteği kapatabilir; macOS ve Windows etkilenmez.
 - `write_batch`, psycopg pipeline destekleyen bağlantılarda statement'ları
   toplu gönderir; 500 kayıtlık JSONL backfill grupları kayıt başına bir
   gidiş-dönüş yerine birkaç senkronizasyonla yazılır. Idempotency ve satır
@@ -45,9 +62,14 @@
 - `scripts/*.py --dsn` yardım metinleri, parolalı DSN'in komut satırında
   süreç listesi ve kabuk geçmişinde görünür olduğunu belirtir ve
   `ROADVISION_DB_DSN` ortam değişkenini önerir.
+- `scripts/run_with_db.sh`, proje içindeki `.venv/bin/python` bulunduğunda
+  PostgreSQL sürücüsünün ve uygulama bağımlılıklarının aynı sanal ortamdan
+  yüklenmesini garanti eder; `.venv` yoksa `python3` geri dönüşü korunur.
 
 ### Düzeltildi
 
+- Tk arşivinde minimum güven sürgüsü yalnız filtre etkin olduğunda
+  kullanılabilir; Run filtresi her iki UI'da "Çalışma no" olarak açıklanır.
 - `test_multiple_cpu_models_use_distinct_pool_workers`, 6'dan az mantıksal
   çekirdekli makinelerde (küçük CI runner'ları) model havuzu tek worker'a
   düştüğü için Barrier zaman aşımıyla başarısız oluyordu; çekirdek sayısı
@@ -56,6 +78,15 @@
   (idempotency anahtarıdır; FIPS ortamları ve güvenlik tarayıcıları için).
   Kullanılmayan iki import temizlendi; `run_models` içindeki `zip` çağrısına
   `strict=True` eklendi.
+
+### Doğrulama
+
+- 255 otomatik test PostgreSQL sürücüsü kurulu ortamda atlama olmadan geçti.
+- PyQt6 arayüzü ekran göstermeden başlatılıp güvenli kapatıldı; arşiv,
+  snapshot ve medya bileşenlerinin PostgreSQL ile etkinleştiği doğrulandı.
+- Dört gerçek model CPU üzerinde sentetik kareyle yüklenip çıkarım yaptı.
+- PostgreSQL 17.10, şema sürümü 3 ve mevcut `model_v2` verileriyle canlı
+  bağlantı doğrulandı; yeni veritabanı migration'ı gerekmedi.
 
 ## [1.2.2] - 2026-07-27
 

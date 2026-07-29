@@ -407,8 +407,16 @@ class RoadVisionQtApp(QMainWindow):
         def scan() -> None:
             try:
                 from ..camera import Camera
+                from ..sources import configured_csi_cameras
 
                 cameras = Camera.get_camera_indexes(APP_CONFIG.max_camera_index)
+                cameras.extend(
+                    configured_csi_cameras(
+                        width=APP_CONFIG.camera_width,
+                        height=APP_CONFIG.camera_height,
+                        fps=APP_CONFIG.camera_fps,
+                    )
+                )
                 self._camera_scan_finished.emit(cameras, None)
             except Exception as exc:  # pragma: no cover - donanım hatası
                 self._camera_scan_finished.emit([], str(exc))
@@ -497,15 +505,24 @@ class RoadVisionQtApp(QMainWindow):
         self.live.set_start_mode("idle" if ready else "disabled")
 
     def _create_source(self):
-        from ..sources import SourceFactory
+        from ..sources import CsiCameraInfo, SourceFactory
 
         kind = self.live.source_kind()
         if kind == "camera":
             current = self.live.camera_index()
             if current < 0 or current >= len(self._camera_infos):
                 raise ValueError("Erişilebilir bir kamera seçin.")
+            camera_info = self._camera_infos[current]
+            if isinstance(camera_info, CsiCameraInfo):
+                return SourceFactory.create_csi_camera(
+                    sensor_id=camera_info.sensor_id,
+                    width=camera_info.width,
+                    height=camera_info.height,
+                    fps=camera_info.fps,
+                    flip_method=camera_info.flip_method,
+                )
             return SourceFactory.create_camera(
-                self._camera_infos[current].index,
+                camera_info.index,
                 APP_CONFIG.camera_width,
                 APP_CONFIG.camera_height,
                 APP_CONFIG.camera_fps,

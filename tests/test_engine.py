@@ -158,6 +158,68 @@ def wait_until(predicate, timeout: float = 2.0) -> bool:
     return False
 
 
+class PreparingManager(FakeManager):
+    """prepare_models sözleşmesini uygulayan fake; sıra ve hataları izler."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.prepare_calls: list[frozenset[str]] = []
+        self.prepared_before_first_run: bool | None = None
+        self._error = error
+
+    def prepare_models(self, model_ids: frozenset[str]) -> None:
+        self.prepare_calls.append(frozenset(model_ids))
+        if self._error is not None:
+            raise self._error
+
+    def run_models(self, frame, model_ids):
+        if self.prepared_before_first_run is None:
+            self.prepared_before_first_run = bool(self.prepare_calls)
+        return super().run_models(frame, model_ids)
+
+
+class ModelPreparationTests(unittest.TestCase):
+    def test_models_are_prepared_before_first_frame(self) -> None:
+        events: list[EngineEvent] = []
+        manager = PreparingManager()
+        engine = ProcessingEngine(events.append, model_manager=manager)  # type: ignore[arg-type]
+
+        engine.start(StaticSource(), {"pothole", "roadline"})
+        self.assertTrue(wait_until(lambda: len(manager.calls) >= 1))
+
+        self.assertEqual(
+            manager.prepare_calls,
+            [frozenset({"pothole", "roadline"})],
+        )
+        self.assertTrue(manager.prepared_before_first_run)
+        engine.stop()
+        engine.shutdown(timeout=2.0)
+
+    def test_preparation_failure_fails_run_and_releases_source(self) -> None:
+        events: list[EngineEvent] = []
+        manager = PreparingManager(error=RuntimeError("ağırlık bozuk"))
+        source = StaticSource()
+        engine = ProcessingEngine(events.append, model_manager=manager)  # type: ignore[arg-type]
+
+        run_id = engine.start(source, {"pothole"})
+        self.assertTrue(
+            wait_until(
+                lambda: any(
+                    event.kind == "error" and event.run_id == run_id
+                    for event in events
+                )
+            )
+        )
+        self.assertTrue(wait_until(lambda: engine.state == EngineState.IDLE))
+
+        error = next(event for event in events if event.kind == "error")
+        self.assertIn("Model hazırlama hatası", error.message)
+        self.assertIn("ağırlık bozuk", error.message)
+        self.assertEqual(manager.calls, [])
+        self.assertTrue(source.released)
+        engine.shutdown(timeout=2.0)
+
+
 class EngineTests(unittest.TestCase):
     def test_static_frame_is_reprocessed_after_model_change(self) -> None:
         events: list[EngineEvent] = []

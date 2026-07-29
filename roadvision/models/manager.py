@@ -123,9 +123,38 @@ class ModelManager:
                     self._model_confidences.get(model_id, self.confidence),
                 )
                 adapter.input_size = self._profile_input_size(spec.input_size)
-                adapter.prepare_model()
+                try:
+                    adapter.prepare_model()
+                    self._warmup_cuda(adapter, adapter_device)
+                except BaseException:
+                    # Yükleme/warmup yarıda kalırsa özellikle CUDA belleğini
+                    # GC zamanlamasına bırakma; asıl hatayı maskelemeden bırak.
+                    try:
+                        adapter.release_model()
+                    except Exception:
+                        pass
+                    raise
                 self._models[model_id] = adapter
             return adapter
+
+    def _warmup_cuda(self, adapter: YoloModelAdapter, device: str) -> None:
+        """CUDA'da ilk gerçek kareden önce kernel/cuDNN ısınmasını tetikler.
+
+        Orin gibi cihazlarda bir modelin ilk çağrısı autotune ve kernel
+        derlemesi nedeniyle saniyeler sürebilir; yükleme aşamasında sentetik
+        bir kareyle tek tahmin bu maliyeti akış başlamadan öder. Kaynak kare
+        küçük tutulur çünkü hesap boyutunu `imgsz` (profil giriş boyutu)
+        belirler. CPU/MPS'te atlanır; olası hata gizlenmez, gerçek karede de
+        aynı hata oluşacağından yükleme aşamasında yüzeye çıkması tercihtir.
+        """
+
+        if not device.startswith("cuda"):
+            return
+        if self.status_callback:
+            self.status_callback(
+                f"{adapter.spec.display_name} GPU için ısındırılıyor…"
+            )
+        adapter.predict(np.zeros((64, 64, 3), dtype=np.uint8))
 
     def _device_for_spec(self, spec) -> str:
         # torchvision NMS'in MPS fallback yolu eski torch/torchvision

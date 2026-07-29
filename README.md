@@ -1,9 +1,9 @@
 # RoadVision — çoklu model test arayüzü
 
-**Kararlı sürüm:** v1.2.2 — 27 Temmuz 2026
+**Kararlı sürüm:** v2.0.1 — 29 Temmuz 2026
 
 İlk kararlı teslimin kapsamı için [VERSION_1.md](VERSION_1.md), bu sürümün
-özeti için [VERSION_1_2_2.md](VERSION_1_2_2.md), tüm değişiklikler için
+özeti için [VERSION_2_0_1.md](VERSION_2_0_1.md), tüm değişiklikler için
 [CHANGELOG.md](CHANGELOG.md) dosyasına bakın. Günlük altyapısı
 [LOGGING.md](LOGGING.md), PostgreSQL ve medya kaydı [DATABASE.md](DATABASE.md)
 belgelerinde açıklanır.
@@ -103,6 +103,12 @@ Sekme ilk açılışta son 24 saati gösterir. Model → tür ağacı üç durum
 seçim; zaman, minimum güven, run ve yalnız gerçek görüntüsü bulunan kayıt
 filtreleri sunar. Zaman, güven, alan oranı, model ve tür kolonları iki yönde
 sıralanabilir; sonuçlar OFFSET yerine keyset imleçleriyle sayfalanır.
+Minimum güven filtresi, yanındaki kutu işaretlenince etkinleşir; kutu kapalıyken
+sürgü bilinçli olarak pasiftir. **Çalışma no (Run)** alanı isteğe bağlıdır:
+boş bırakıldığında tüm çalışmalar, arşiv tablosunun **Run** sütunundaki sayı
+yazıldığında yalnız o çalışma gösterilir. Çalışma numarası uygulama yeniden
+açıldığında tekrar 1'den başlayabildiği için geçmiş aramalarda zaman filtresiyle
+birlikte kullanılmalıdır.
 
 Arşiv tablosundaki 📷 işaretli satıra çift tıklamak mevcut tekil görüntüleyici
 penceresini açar. `capture_id` bulunmasına rağmen medya saklama süresi dolmuş
@@ -129,11 +135,35 @@ Kamera izni ilk çalıştırmada işletim sistemi tarafından sorulabilir. Hiç 
 
 macOS AVFoundation kamera indekslerini ardışık sunduğu için tarama ilk boş indekste durur. Bu, var olmayan `1..7` indeksleri için OpenCV'nin terminale bastığı `out device of bound` uyarılarını engeller.
 
+### Linux ve Jetson kameraları
+
+Linux/V4L2 üzerinde uygulama, UVC kameraların 1280×720 çözünürlükte ham YUYV
+bant genişliği sınırına takılmaması için çözünürlük ve FPS'ten önce varsayılan
+olarak `MJPG` formatını ister. `ROADVISION_CAMERA_FOURCC=YUYV` ile başka bir
+format seçilebilir; değişken boş tanımlanırsa format isteği kapatılır.
+
+Jetson CSI sensörlerini PyQt ve Tk kamera listesine eklemek için:
+
+```bash
+ROADVISION_CSI_SENSORS=0 python3 app.py
+# Birden çok sensörü listelemek için: ROADVISION_CSI_SENSORS=0,1
+```
+
+`ROADVISION_CSI_FLIP_METHOD` değeri 0–7 arasında olmalıdır. CSI hattı
+`nvarguscamerasrc → NVMM/NV12 → nvvidconv → BGR → appsink` kullanır ve
+inference yavaşladığında GStreamer tarafında da eski kareleri düşürür.
+
+Pip'in standart `opencv-python` wheel'i GStreamer içermez. Jetson kurulumunda
+JetPack'in GStreamer destekli sistem OpenCV'sini gören
+`--system-site-packages` ortamı ve aynı JetPack sürümüne uygun NVIDIA
+Torch/Torchvision paketleri kullanılmalıdır. Yanlış CUDA/Torchvision
+eşleşmesinde uygulama CPU'ya sessiz geçmek yerine kurulum yönlendirmesi verir.
+
 ## Modüler yapı
 
 ```text
 app.py
-└── RoadVisionApp                 # Yalnızca Tk ana thread'inde UI günceller
+└── RoadVisionQtApp / RoadVisionApp
     ├── EventJournal              # JSONL + PostgreSQL + canlı oturum günlüğü
     ├── ArchiveFetcher            # Salt-okunur latest-refresh DB worker'ı
     ├── ArchivePage               # Filtreli, keyset sayfalı geçmiş görünümü
@@ -141,6 +171,7 @@ app.py
         ├── MediaRecorder         # Sınırlı async JPEG + MediaSink
         ├── MediaSource
         │   ├── CameraSource ── Camera
+        │   ├── GStreamerCameraSource ── Jetson CSI / özel pipeline
         │   ├── ImageSource
         │   └── VideoSource
         └── ModelManager
@@ -156,7 +187,9 @@ Ayrıntılı sınıf sorumlulukları ve genişletme noktaları [ARCHITECTURE.md]
 - Boyutu 1 olan kuyruk sadece en güncel kareyi tutar. Model akıştan yavaşsa eski kareler birikerek gecikme oluşturmaz.
 - CUDA/MPS üzerindeki model çağrıları tek inference worker'ında sıralı çalışır. Böylece GPU belleği ve kernel'ler için dört modelin aynı anda yarışması engellenir.
 - CPU aygıtında birden fazla model seçildiğinde bağımsız model tahminleri kalıcı worker havuzunda paralel çalışır. PyTorch intra-op thread sayısı seçili model sayısına göre sınırlandırılarak oversubscription engellenir; çizimler tahminler bittikten sonra deterministik sırayla birleştirilir.
-- Modeller ilk seçildiklerinde yüklenir ve bellekte önbelleğe alınır; daha sonraki model geçişleri hızlıdır.
+- Başlangıçta seçili modeller ilk gerçek kareden önce yüklenir ve CUDA
+  modelleri sentetik kareyle ısındırılır. Sonradan eklenen modeller lazy-load
+  edilir; yüklenen bütün modeller bellekte önbelleğe alınır.
 - CUDA bulunduğunda otomatik olarak `cuda:0`, Apple MPS bulunduğunda `mps`, aksi halde `cpu` kullanılır. CUDA üzerinde yarım hassasiyet açılır.
 - Apple MPS üzerinde henüz uygulanmamış `torchvision::nms` operatörü için CPU fallback otomatik etkinleştirilir. Kullanılan PyTorch sürümü bu fallback'i uygulamazsa ilk hatalı çağrı CPU'da yeniden denenir ve model cache'i CPU moduna geçirilir.
 - Bazı macOS torch/torchvision sürümlerinde MPS NMS fallback'i detection kutularının `xyxy` koordinatlarını bozabildiği için `detect`, instance `segment`, `obb` ve `pose` görevleri doğrudan CPU uyumluluk modunda çalışır. Saf `semantic` yol çizgisi modeli MPS üzerinde kalır; arayüz bunu `MPS + CPU(DET)` olarak gösterir.
@@ -187,8 +220,8 @@ için [MEDYA_TASARIM_PLANI.md](MEDYA_TASARIM_PLANI.md) ve
 ## Sürüm geçmişi ve geri dönüş
 
 Kararlı sürümler Git etiketleriyle korunur. Güncel geliştirme `main`
-dalındadır; yayımlanmış `v1.2.2`, `v1.2.1`, `v1.2.0`, `v1.1.0`, `v1.0.1`
-ve `v1.0.0` sürümleri kendi etiketlerinden açılabilir.
+dalındadır; yayımlanmış `v2.0.1`, `v1.2.2`, `v1.2.1`, `v1.2.0`, `v1.1.0`,
+`v1.0.1` ve `v1.0.0` sürümleri kendi etiketlerinden açılabilir.
 
 Eski bir sürümü yalnız incelemek veya çalıştırmak için:
 
@@ -206,8 +239,6 @@ git switch -c inceleme/v1.0.1 v1.0.1
 Güncel sürüm dalına dönmek için `git switch main` kullanılabilir.
 
 ## Model klasörleri
-
-## Klasorler
 
 - `01_roadline_semantic`: tek sinifli yol cizgisi semantic segmentation modeli, 1024 giris.
 - `02_tabela_detection`: 16 sinifli tabela ve trafik isigi detection modeli, 640 giris.

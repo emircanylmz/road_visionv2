@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -15,6 +15,7 @@ from roadvision.logbook import (
     SessionLogSink,
 )
 from roadvision.ui.app import PREVIEW_PLACEHOLDER, RoadVisionApp
+from roadvision.sources import CsiCameraInfo, SourceKind
 
 
 class FakeEngine:
@@ -85,6 +86,36 @@ class SourceResetTests(unittest.TestCase):
         app._source_is_ready = Mock(return_value=True)  # type: ignore[method-assign]
         app._selected_models = Mock(return_value={"pothole"})  # type: ignore[method-assign]
         return app
+
+    @patch("roadvision.ui.app.SourceFactory.create_csi_camera")
+    def test_configured_csi_camera_uses_gstreamer_source(self, create_csi) -> None:
+        app = RoadVisionApp.__new__(RoadVisionApp)
+        app.source_kind = Mock()
+        app.source_kind.get.return_value = SourceKind.CAMERA.value
+        app.camera_combo = Mock()
+        app.camera_combo.current.return_value = 0
+        app._camera_infos = [
+            CsiCameraInfo(
+                sensor_id=1,
+                width=1920,
+                height=1080,
+                fps=60,
+                flip_method=2,
+            )
+        ]
+        expected = object()
+        create_csi.return_value = expected
+
+        result = RoadVisionApp._create_source(app)
+
+        self.assertIs(result, expected)
+        create_csi.assert_called_once_with(
+            sensor_id=1,
+            width=1920,
+            height=1080,
+            fps=60,
+            flip_method=2,
+        )
 
     def test_source_change_requests_stop_and_immediately_resets_visible_state(self) -> None:
         app = self.make_app(EngineState.RUNNING, run_id=7)

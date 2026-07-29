@@ -139,7 +139,7 @@ class FilterPanel(Card):
         self.confidence_toggle = ToggleSwitch(self)
         self.confidence_toggle.toggled.connect(self._confidence_toggled)
         confidence_header.addWidget(self.confidence_toggle)
-        confidence_header.addWidget(muted_label("Minimum güven", self))
+        confidence_header.addWidget(muted_label("Minimum güven filtresi", self))
         confidence_header.addStretch(1)
         self.confidence_value = mono_label(
             "0.50", self, size=11, color=theme.ACCENT, bold=True
@@ -164,9 +164,9 @@ class FilterPanel(Card):
 
         run_row = QHBoxLayout()
         run_row.setSpacing(8)
-        run_row.addWidget(muted_label("Run", self))
+        run_row.addWidget(muted_label("Çalışma no (Run)", self))
         self.run_edit = QLineEdit(self)
-        self.run_edit.setPlaceholderText("tümü")
+        self.run_edit.setPlaceholderText("boş = tüm çalışmalar")
         self.run_edit.setFont(mono_font(8))
         self.run_edit.textEdited.connect(lambda _text: self._emit_change())
         run_row.addWidget(self.run_edit, 1)

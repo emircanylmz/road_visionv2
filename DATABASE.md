@@ -116,7 +116,7 @@ artımlı rollup ve zaman partitioning ayrı migration olarak değerlendirilebil
 
 ## Uygulama içindeki Tespit Arşivi
 
-v1.2.2, şema 3'teki tekil tespitleri sağ paneldeki **Tespit Arşivi**
+v2.0.1, şema 3'teki tekil tespitleri sağ paneldeki **Tespit Arşivi**
 sekmesinde salt-okunur olarak gösterir. DSN tanımlı değilse fetcher kurulmaz;
 DB veya şema hatası canlı inference, günlük ve medya yazma hatlarını
 etkilemez.
@@ -140,6 +140,13 @@ minimum güven, run ve model/tür seçimidir. Sayfalama OFFSET yerine
 ASC/DESC ve NULL değerleri açıkça yöneten keyset imleçleri kullanır.
 Page ve filtre sayımları tek refresh revision'ında, aynı
 `REPEATABLE READ, READ ONLY` transaction'da alınır.
+
+Minimum güven filtresi UI'daki kutu işaretlenince etkinleşir; semantik
+tespitlerde güven değeri `NULL` olabildiğinden bu kayıtlar etkin bir minimum
+güven filtresinde sonuç dışı kalır. **Çalışma no (Run)**, uygulamanın her
+Başlat işlemine verdiği oturum içi sıra numarasıdır. Alan boşsa tüm çalışmalar
+aranır; sayı girilirse yalnız o `run_id` seçilir. Numara uygulama süreci yeniden
+başladığında tekrar edebileceği için tarih filtresiyle birlikte kullanılmalıdır.
 
 Şema 3 bu özelliğin işlevsel sözleşmesi için yeterlidir. Mevcut indeksler
 özellikle zaman/tür yoluna yardımcı olur; confidence, alan oranı veya

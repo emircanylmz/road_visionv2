@@ -55,7 +55,7 @@ def load_archive_page_class():
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
-        return module.ArchivePage
+        return module.ArchivePage, module.FilterBar
     finally:
         if previous_module is None:
             sys.modules.pop(module_name, None)
@@ -65,7 +65,7 @@ def load_archive_page_class():
             sys.modules.pop(package_name, None)
 
 
-ArchivePage = load_archive_page_class()
+ArchivePage, FilterBar = load_archive_page_class()
 
 
 def model_node(
@@ -383,6 +383,28 @@ class ArchiveStateTests(unittest.TestCase):
 
 
 class ArchivePageHeadlessWiringTests(unittest.TestCase):
+    def test_confidence_scale_is_enabled_only_when_filter_is_checked(self) -> None:
+        filter_bar = FilterBar.__new__(FilterBar)
+        filter_bar._enabled = True
+        filter_bar.confidence_enabled = Mock()
+        filter_bar.confidence_scale = Mock()
+
+        filter_bar.confidence_enabled.get.return_value = False
+        FilterBar._sync_confidence_state(filter_bar)
+        filter_bar.confidence_scale.configure.assert_called_with(
+            state="disabled"
+        )
+
+        filter_bar.confidence_enabled.get.return_value = True
+        FilterBar._sync_confidence_state(filter_bar)
+        filter_bar.confidence_scale.configure.assert_called_with(state="normal")
+
+        filter_bar._enabled = False
+        FilterBar._sync_confidence_state(filter_bar)
+        filter_bar.confidence_scale.configure.assert_called_with(
+            state="disabled"
+        )
+
     def test_public_lifecycle_surface_exists(self) -> None:
         for method_name in (
             "activate",

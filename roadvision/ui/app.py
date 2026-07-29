@@ -23,7 +23,12 @@ from ..media import (
     create_default_recorder,
     create_default_snapshot_fetcher,
 )
-from ..sources import SourceFactory, SourceKind
+from ..sources import (
+    CsiCameraInfo,
+    SourceFactory,
+    SourceKind,
+    configured_csi_cameras,
+)
 from .archive_page import ArchivePage
 
 
@@ -272,7 +277,7 @@ class RoadVisionApp:
         )
         self._photo: ImageTk.PhotoImage | None = None
         self._last_display_frame = None
-        self._camera_infos: list[CameraInfo] = []
+        self._camera_infos: list[CameraInfo | CsiCameraInfo] = []
         self._camera_scan_running = False
         self._active_run_id: int | None = None
         self._closing = False
@@ -795,13 +800,24 @@ class RoadVisionApp:
         def scan() -> None:
             try:
                 cameras = Camera.get_camera_indexes(APP_CONFIG.max_camera_index)
+                cameras.extend(
+                    configured_csi_cameras(
+                        width=APP_CONFIG.camera_width,
+                        height=APP_CONFIG.camera_height,
+                        fps=APP_CONFIG.camera_fps,
+                    )
+                )
                 self.root.after(0, self._finish_camera_scan, cameras, None)
             except Exception as exc:
                 self.root.after(0, self._finish_camera_scan, [], str(exc))
 
         threading.Thread(target=scan, name="roadvision-camera-scan", daemon=True).start()
 
-    def _finish_camera_scan(self, cameras: list[CameraInfo], error: str | None) -> None:
+    def _finish_camera_scan(
+        self,
+        cameras: list[CameraInfo | CsiCameraInfo],
+        error: str | None,
+    ) -> None:
         self._camera_scan_running = False
         self._camera_infos = cameras
         values = [str(camera) for camera in cameras]
@@ -886,8 +902,17 @@ class RoadVisionApp:
             current = self.camera_combo.current()
             if current < 0 or current >= len(self._camera_infos):
                 raise ValueError("Erişilebilir bir kamera seçin.")
+            camera_info = self._camera_infos[current]
+            if isinstance(camera_info, CsiCameraInfo):
+                return SourceFactory.create_csi_camera(
+                    sensor_id=camera_info.sensor_id,
+                    width=camera_info.width,
+                    height=camera_info.height,
+                    fps=camera_info.fps,
+                    flip_method=camera_info.flip_method,
+                )
             return SourceFactory.create_camera(
-                self._camera_infos[current].index,
+                camera_info.index,
                 APP_CONFIG.camera_width,
                 APP_CONFIG.camera_height,
                 APP_CONFIG.camera_fps,

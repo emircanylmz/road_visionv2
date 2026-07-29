@@ -22,7 +22,12 @@ Bütün medya tiplerinin soyut sözleşmesidir:
 - `release_source()`
 - `is_static`
 
-`CameraSource`, `ImageSource` ve `VideoSource` bu sözleşmeyi uygular. `SourceFactory` UI'ın somut sınıfları bilmeden doğru kaynağı üretmesini sağlar. Yeni bir RTSP kaynağı eklemek için yalnızca yeni bir `MediaSource` sınıfı ve factory metodu gerekir.
+`CameraSource`, `GStreamerCameraSource`, `ImageSource` ve `VideoSource` bu
+sözleşmeyi uygular. `GStreamerCameraSource`, Jetson CSI için
+`nvarguscamerasrc` hattını veya dışarıdan verilen özel bir pipeline'ı
+`cv2.CAP_GSTREAMER` ile açar. `ROADVISION_CSI_SENSORS` ile tanımlanan
+sensörler PyQt ve Tk kamera listesine eklenir. `SourceFactory` UI'ın somut
+sınıfları bilmeden doğru kaynağı üretmesini sağlar.
 
 ## Model katmanı
 
@@ -59,7 +64,14 @@ Yeni bir inference backend'inin uygulaması gereken soyut sözleşmedir:
 - `set_annotation_enabled(model_id, enabled)`
 - `release_models()`
 
-Model örneklerinin tek sahibidir. Lazy loading, cache, model bazlı güven eşikleri, çizim görünürlüğü ve aygıt seçimi burada tutulur. Her model ham kare üzerinde tahmin yapar; görünür çizimler ortak kopyaya sırayla eklenir. Çizimi kapalı bir model yine tahmin ve nesne sayımı yapar. Medya kaydı etkinse ayrıca UI görünürlüğünden bağımsız, tüm model işaretlerini taşıyan `annotated_frame` üretilir. Bu sayede önceki modelin çizdiği kutular sonraki modelin tahmin girdisini kirletmez.
+Model örneklerinin tek sahibidir. Başlangıç model kümesi ilk gerçek kareden
+önce hazırlanır; CUDA adaptörleri kernel/cuDNN ilk çağrı maliyetini önden
+ödemek için sentetik kareyle bir kez ısındırılır. Lazy loading, cache, model
+bazlı güven eşikleri, çizim görünürlüğü ve aygıt seçimi burada tutulur. Her
+model ham kare üzerinde tahmin yapar; görünür çizimler ortak kopyaya sırayla
+eklenir. Çizimi kapalı bir model yine tahmin ve nesne sayımı yapar. Medya kaydı
+etkinse ayrıca UI görünürlüğünden bağımsız, tüm model işaretlerini taşıyan
+`annotated_frame` üretilir.
 
 ## İşleme katmanı
 

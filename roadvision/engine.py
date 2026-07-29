@@ -526,6 +526,18 @@ class ProcessingEngine:
                 self._fail_run(context, f"Kaynak bırakılamadı: {exc}")
 
     def _inference_loop(self, context: _RunContext) -> None:
+        # Ağır yükleme (LFS/SHA doğrulaması, YOLO load, CUDA warmup) ilk
+        # gerçek karenin önüne alınır; capture zaten models_ready_event'i
+        # bunun için bekliyordu. Başarısızlıkta stop_event kapıyı kapatır,
+        # capture bekleyişten stop kontrolüyle çıkar. Testlerdeki sade
+        # fake'ler için yöntem yoksa eski davranış (lazy yükleme) korunur.
+        prepare_models = getattr(self._manager, "prepare_models", None)
+        if callable(prepare_models):
+            try:
+                prepare_models(context.selected_models)
+            except Exception as exc:
+                self._fail_run(context, f"Model hazırlama hatası: {exc}")
+                return
         context.models_ready_event.set()
 
         smoothed_ms: float | None = None

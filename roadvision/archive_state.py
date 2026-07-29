@@ -149,9 +149,9 @@ class FilterDraft:
             try:
                 run_id = int(raw_run)
             except ValueError as exc:
-                raise ValueError("Run kimliği tam sayı olmalıdır.") from exc
+                raise ValueError("Çalışma numarası tam sayı olmalıdır.") from exc
             if run_id < 0:
-                raise ValueError("Run kimliği negatif olamaz.")
+                raise ValueError("Çalışma numarası negatif olamaz.")
 
         return DetectionFilter(
             type_ids=type_ids,

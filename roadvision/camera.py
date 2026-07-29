@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import threading
 from dataclasses import dataclass
@@ -36,6 +37,22 @@ class Camera:
         if platform.system() == "Windows":
             return cv2.CAP_DSHOW
         return cv2.CAP_ANY
+
+    @staticmethod
+    def _preferred_fourcc() -> str:
+        """Kamera açılışında istenecek dört karakterlik piksel formatı kodu.
+
+        Linux/V4L2'de çoğu UVC webcam varsayılan ham YUYV formatında USB
+        bant genişliği nedeniyle 1280×720'de ~5-10 fps ile sınırlıdır; MJPG
+        istemek 30 fps yolunu açar (Jetson dahil). macOS AVFoundation ve
+        Windows DSHOW kendi uygun varsayılanını seçtiğinden yalnız Linux'ta
+        uygulanır. `ROADVISION_CAMERA_FOURCC` ile dört karakterlik başka bir
+        kod (ör. `YUYV`) zorlanabilir; boş değer isteği tamamen kapatır.
+        """
+        if platform.system() != "Linux":
+            return ""
+        value = os.environ.get("ROADVISION_CAMERA_FOURCC", "MJPG").strip().upper()
+        return value if len(value) == 4 else ""
 
     @classmethod
     def get_camera_indexes(cls, max_index: int = 8) -> list[CameraInfo]:
@@ -76,6 +93,13 @@ class Camera:
             if not capture.isOpened():
                 capture.release()
                 raise RuntimeError(f"Kamera {index} açılamadı.")
+            fourcc = self._preferred_fourcc()
+            if fourcc:
+                # Format, çözünürlük/FPS'ten ÖNCE istenmelidir; V4L2 aksi
+                # halde YUYV kısıtına göre kareyi/hızı düşürebilir. `set`
+                # başarısızlığı ölümcül değildir: sürücü formatı reddederse
+                # mevcut varsayılanla devam edilir.
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             capture.set(cv2.CAP_PROP_FPS, fps)

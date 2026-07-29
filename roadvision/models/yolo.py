@@ -74,6 +74,19 @@ class YoloModelAdapter(ModelAdapter):
             return self._predict_once(frame)
         except RuntimeError as exc:
             message = str(exc)
+            if self.device.startswith("cuda") and "torchvision::nms" in message:
+                # Jetson'daki klasik yanlış kurulum: CUDA'lı torch'un yanına
+                # PyPI'ın CPU derlemesi torchvision gelir; NMS CUDA backend'i
+                # bulunamaz. CPU'ya sessizce düşmek yanlış yapılandırmayı
+                # gizleyeceğinden çalışma, eyleme dönük bir mesajla durdurulur.
+                raise RuntimeError(
+                    "torchvision NMS bu kurulumda CUDA backend'iyle "
+                    "çalıştırılamadı; büyük olasılıkla CUDA'lı torch ile CPU "
+                    "derlemesi bir torchvision karışmış. Jetson'da torch ve "
+                    "torchvision'ı JetPack sürümünüze uygun NVIDIA "
+                    "wheel'lerinden BİRLİKTE kurun; kurulumdan sonra "
+                    "torchvision.ops.nms'i CUDA tensörüyle doğrulayın."
+                ) from exc
             is_mps_nms_error = self.device == "mps" and (
                 "torchvision::nms" in message or "not currently implemented for the MPS device" in message
             )

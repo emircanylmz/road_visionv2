@@ -149,7 +149,7 @@ class FilterBar(ttk.Frame):
         confidence_box.columnconfigure(0, weight=1)
         self.confidence_check = ttk.Checkbutton(
             confidence_box,
-            text="Minimum güven",
+            text="Minimum güven filtresi",
             variable=self.confidence_enabled,
             command=self._confidence_toggled,
         )
@@ -166,15 +166,27 @@ class FilterBar(ttk.Frame):
             to=1.0,
             variable=self.confidence,
             command=self._confidence_changed,
+            state="disabled",
         )
         self.confidence_scale.grid(row=1, column=0, columnspan=2, sticky="ew")
 
-        ttk.Label(self, text="Run kimliği", style="Panel.TLabel").grid(
-            row=0, column=4, sticky="w"
+        run_box = ttk.Frame(self, style="Panel.TFrame")
+        run_box.grid(row=0, column=4, rowspan=2, sticky="ew", padx=(0, 8))
+        ttk.Label(
+            run_box,
+            text="Çalışma no (Run)",
+            style="Panel.TLabel",
+        ).grid(
+            row=0, column=0, sticky="w"
         )
-        self.run_entry = ttk.Entry(self, textvariable=self.run_id, width=10)
-        self.run_entry.grid(row=1, column=4, sticky="ew", padx=(0, 8))
+        self.run_entry = ttk.Entry(run_box, textvariable=self.run_id, width=12)
+        self.run_entry.grid(row=1, column=0, sticky="ew")
         self.run_entry.bind("<KeyRelease>", self._entry_changed)
+        ttk.Label(
+            run_box,
+            text="Boş = tüm çalışmalar",
+            style="Panel.TLabel",
+        ).grid(row=2, column=0, sticky="w")
 
         self.image_check = ttk.Checkbutton(
             self,
@@ -218,7 +230,7 @@ class FilterBar(ttk.Frame):
         normal = "normal" if enabled else "disabled"
         self.time_combo.configure(state="readonly" if enabled else "disabled")
         self.confidence_check.configure(state=normal)
-        self.confidence_scale.configure(state=normal)
+        self._sync_confidence_state()
         self.run_entry.configure(state=normal)
         self.image_check.configure(state=normal)
         self.refresh_button.configure(state=normal)
@@ -260,7 +272,14 @@ class FilterBar(ttk.Frame):
         self.to_entry.configure(state="disabled")
 
     def _confidence_toggled(self) -> None:
+        self._sync_confidence_state()
         self._confidence_changed(str(self.confidence.get()))
+
+    def _sync_confidence_state(self) -> None:
+        active = self._enabled and bool(self.confidence_enabled.get())
+        self.confidence_scale.configure(
+            state="normal" if active else "disabled"
+        )
 
     def _confidence_changed(self, raw_value: str) -> None:
         try:

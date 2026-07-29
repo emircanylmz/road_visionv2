@@ -36,7 +36,7 @@ class ModelSpec:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     title: str = "RoadVision"
-    build: str = "v1.2.2"
+    build: str = "v2.0.1"
     camera_width: int = 1280
     camera_height: int = 720
     camera_fps: int = 30
