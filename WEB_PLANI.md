@@ -1,0 +1,477 @@
+# RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
+
+Durum: **plan onaylandı; Faz 0 tamamlandı**
+Revizyon: 29 Temmuz 2026
+
+## 1. Amaç ve kapsam
+
+Masaüstü uygulamanın PostgreSQL'e yazdığı günlükleri, tekil tespitleri ve
+tespit görüntülerini tarayıcıdan sunan; tespitlerin insan eliyle
+**doğru / düzeltildi / yanlış** olarak sınıflandırılmasını ve bu kararların
+model eğitimi için dataset tablolarında biriktirilmesini sağlayan ayrı bir
+web servisi.
+
+Kapsam içi: üyelik + yönetici onayı, oturum yönetimi, log görüntüleyici,
+görüntülü tespit arşivi, doğrulama iş akışı (kutu düzeltme ve sınıf
+değiştirme dahil), dataset tabloları ve YOLO formatında dışa aktarma.
+
+Kapsam dışı: masaüstü uygulamada herhangi bir değişiklik, canlı inference,
+model eğitimi. Web servisi masaüstünün varlığından haberdar değildir; tek
+temas noktası PostgreSQL'dir.
+
+## 2. İlk plandan revizyonlar
+
+Bu bölüm, ilk taslakta yer alıp gözden geçirmede değiştirilen kararları ve
+gerekçelerini kaydeder (bkz. MEDYA_TASARIM_PLANI.md §2 ile aynı disiplin).
+
+1. **Alembic yerine sürüm-kapılı SQL runner.** İlk taslak `webapp` şeması
+   için Alembic öneriyordu. Masaüstü tarafında zaten kanıtlanmış bir düzen
+   var: `schema_info` sürüm kapısı + `pg_advisory_xact_lock` + tekrar
+   çalıştırılabilir SQL (`roadvision/db.py ensure_schema`). Web tarafında
+   aynı deseni kullanmak tek tip operasyon modeli sağlar, SQLAlchemy
+   bağımlılığını ortadan kaldırır ve migration'ların davranışı masaüstüyle
+   birebir aynı testlerle doğrulanabilir. Alembic terk edildi;
+   `web/app/migrations.py` içindeki `ensure_webapp_schema` kullanılacak.
+2. **`webapp` şemasından `public` tablolarına FK verilmez.** İlk taslakta
+   `detection_reviews.object_id` için `REFERENCES public.detected_objects`
+   vardı. Masaüstünün retention/prune hattı (`prune_media`) kendi
+   tablolarında satır siler; web tarafından eklenen bir FK bu silmeleri
+   engelleyebilir veya web şemasını masaüstü VACUUM/şema kararlarına
+   bağımlı kılar. Karar: web tabloları `public` kimliklerini **düz değer**
+   olarak taşır (`object_id BIGINT`), bütünlük API katmanında ve
+   "masaüstü `detected_objects` satırı silmez" sözleşmesiyle korunur. Bu
+   sayede web rolüne `REFERENCES` yetkisi de verilmez; erişim saf
+   `SELECT`te kalır.
+3. **Karar (verdict) ikiliden üçlüye çıktı.** Kutu düzeltme ve sınıf
+   değiştirme isteğiyle `correct / corrected / wrong` üçlüsü tanımlandı.
+   `corrected`, "nesne gerçek ama kutusu ve/veya sınıfı hatalı" durumudur
+   ve eğitim açısından pozitif örnektir.
+4. **Dataset bölümlemesi `positive/wrong` olarak adlandırıldı.** İlk
+   taslaktaki `dataset_correct` bölümü, `corrected` kararını da
+   kapsadığından `dataset_positive` adını aldı; `correct` ve `corrected`
+   aynı fiziksel bölümde, `wrong` ayrı bölümde tutulur.
+
+## 3. Mimari ve teknoloji
+
+```text
+Tarayıcı (React SPA)
+   │ HTTPS, HttpOnly session cookie
+   ▼
+nginx  ── statik SPA + /api reverse proxy        (Faz 2'de eklenir)
+   ▼
+FastAPI (web/app)  ── psycopg3 AsyncConnectionPool
+   │ rol: roadvision_web
+   ▼
+PostgreSQL 17 (mevcut compose servisi)
+   ├── public  şeması  → yalnız SELECT (masaüstünün alanı)
+   └── webapp şeması  → sahibi roadvision_web (webin alanı)
+```
+
+| Katman | Seçim | Gerekçe |
+| --- | --- | --- |
+| Backend | Python 3.11 + FastAPI | Projeyle aynı dil; Pydantic ile sözleşme-öncelikli doğrulama; otomatik OpenAPI |
+| DB erişimi | psycopg3 + psycopg_pool | Masaüstüyle aynı sürücü; `roadvision.archive` filtre/keyset üreticileri yeniden kullanılabilir |
+| Web migration | Sürüm-kapılı SQL runner (§2/1) | Masaüstü `ensure_schema` deseniyle bire bir aynı disiplin |
+| Frontend | React 18 + TypeScript + Vite | Yoğun etkileşimli arşiv/doğrulama ekranları |
+| Veri çekme | TanStack Query + TanStack Table | Keyset sayfalama, aralıklı yenileme, sıralanabilir kolonlar |
+| Stil | Tailwind CSS | Hız; masaüstü v2 temasının renkleri değişkenlere taşınır |
+| Kimlik | HttpOnly cookie + DB-backed session, Argon2id | Dahili panel için JWT'den basit ve anında iptal edilebilir |
+| Dağıtım | Mevcut compose'a `api` (+Faz 2'de `nginx`) | Postgres zaten compose'ta |
+
+## 4. Veritabanı sözleşmesi
+
+### 4.1 Erişim modeli ve rol
+
+`roadvision_web` rolü `public` şemasında yalnız `USAGE` + `SELECT` alır;
+`ALTER DEFAULT PRIVILEGES` ile masaüstünün ileride oluşturacağı tablolar da
+otomatik `SELECT` kapsamına girer. `webapp` şemasının sahibi
+`roadvision_web`tir; masaüstü migration'ları (`public.schema_info` kapısı)
+bu şemayı hiç görmez. Kurulum `web/db/bootstrap.sql` ile masaüstü şemasının
+sahibi rol tarafından bir kez yapılır (bkz. §9 Faz 0).
+
+Advisory-lock sabitleri çakışmayı önlemek için ayrıktır:
+
+| Kilit | Sabit | Kullanan |
+| --- | --- | --- |
+| Masaüstü migration | 1385428466 | `db/roadvision_schema_v1_2_1.sql`, `ensure_schema` |
+| Web migration | 1385428467 | `web/app/migrations.py` |
+| Web bootstrap | 1385428468 | `web/db/bootstrap.sql` |
+
+### 4.2 Kimlik ve denetim (Faz 1 migration'ı)
+
+```sql
+CREATE TABLE webapp.users (
+    user_id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email         TEXT NOT NULL,
+    password_hash TEXT NOT NULL,                 -- Argon2id
+    full_name     TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'member'
+                  CHECK (role IN ('member', 'admin')),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'approved', 'rejected', 'disabled')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_at   TIMESTAMPTZ,
+    approved_by   BIGINT REFERENCES webapp.users(user_id)
+);
+CREATE UNIQUE INDEX users_email_lower_uq ON webapp.users (lower(email));
+
+CREATE TABLE webapp.sessions (
+    session_id UUID PRIMARY KEY,
+    user_id    BIGINT NOT NULL REFERENCES webapp.users(user_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    ip         INET,
+    user_agent TEXT
+);
+CREATE INDEX sessions_user_idx ON webapp.sessions (user_id, expires_at);
+
+CREATE TABLE webapp.admin_audit (
+    audit_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    actor_id   BIGINT NOT NULL REFERENCES webapp.users(user_id),
+    action     TEXT NOT NULL,        -- approve_user, reject_user, disable_user,
+                                     -- revoke_session, change_review, ...
+    target     TEXT NOT NULL,        -- 'user:12', 'review:9812' gibi
+    detail     JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Kayıt olan herkes `pending` başlar; giriş yalnız `approved` için kabul
+edilir. İlk yönetici `web/scripts/create_admin.py` (Faz 1) ile açılır.
+
+### 4.3 Doğrulama kayıtları: satır yokluğu = doğrulanmadı
+
+Tekil tespit başına en fazla bir karar satırı tutulur; karar satırı olmayan
+her `public.detected_objects` kaydı tanım gereği **doğrulanmadı**dır. Yeni
+gelen tespitler böylece kendiliğinden doğrulanmamış kuyruğuna düşer ve
+masaüstü yazım hattına tek satır dokunulmaz.
+
+```sql
+CREATE TABLE webapp.detection_reviews (
+    object_id         BIGINT PRIMARY KEY,   -- public.detected_objects.id (FK'sız, bkz. §2/2)
+    verdict           TEXT NOT NULL
+                      CHECK (verdict IN ('correct', 'corrected', 'wrong')),
+    corrected_bbox    REAL[]
+                      CHECK (corrected_bbox IS NULL
+                             OR array_length(corrected_bbox, 1) = 4),
+    corrected_type_id INTEGER,              -- public.detection_types.type_id (FK'sız)
+    reviewer_id       BIGINT NOT NULL REFERENCES webapp.users(user_id),
+    reviewed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note              TEXT,
+    -- corrected kararı en az bir düzeltme taşımalı; diğer kararlar taşımamalı.
+    CONSTRAINT corrected_payload CHECK (
+        (verdict = 'corrected')
+        = (corrected_bbox IS NOT NULL OR corrected_type_id IS NOT NULL)
+    )
+);
+CREATE INDEX detection_reviews_reviewed_idx
+    ON webapp.detection_reviews (reviewed_at);
+```
+
+`object_id PRIMARY KEY`, iki kullanıcının aynı tespiti aynı anda
+karara bağlamasını veritabanı seviyesinde engeller; ikinci istek 409 alır.
+
+Düzeltme kuralları:
+
+- `corrected_type_id`, **tespitin geldiği modelin** sınıf sözlüğünden
+  seçilmelidir (`detection_types.model_id` eşleşmesi). Modeller ayrı
+  dataset'lerle eğitildiğinden çapraz-model düzeltme anlamsızdır; kural API
+  katmanında doğrulanır, Faz 4 migration'ında trigger ile de bağlanır.
+- `corrected_bbox`, orijinal `detected_objects.bbox` ile aynı koordinat
+  sistemindedir: modelin işlediği kare pikselinde `xyxy` (bkz. §4.6).
+- Semantic model (`roadline`) kutusuz olduğundan yalnız
+  `correct`/`wrong` alabilir; arayüz düzeltme modunu bu modelde gizler,
+  API `corrected` isteğini reddeder.
+
+### 4.4 Kalıcı görüntü kopyası (copy-on-verify)
+
+Masaüstünün `prune_media` hattı `media_blobs`u retention süresi ve toplam
+boyut kotasıyla siler. Doğrulanmış bir örneğin görüntüsü dataset için
+kalıcı olmalıdır; bu yüzden karar anında JPEG baytları webin kendi
+deposuna kopyalanır:
+
+```sql
+CREATE TABLE webapp.dataset_media (
+    sha256    TEXT PRIMARY KEY,   -- public.media_blobs.sha256 ile aynı özet
+    bytes     BYTEA NOT NULL,
+    width     INTEGER,
+    height    INTEGER,
+    byte_size INTEGER NOT NULL
+);
+```
+
+Özet anahtar `media_blobs` ile aynı olduğundan aynı capture'dan gelen
+ikinci tespitin kopya maliyeti sıfırdır (`ON CONFLICT DO NOTHING`).
+Görüntüsü retention nedeniyle çoktan silinmiş eski bir tespit
+doğrulanırsa karar yine kaydedilir; örnek `original_sha = NULL` ile
+görüntüsüz işaretlenir ve arayüz bunu açıkça gösterir. Hacim 10 GB'ı
+aşarsa `bytes` kolonu nesne deposu yoluna (MinIO/S3) taşınabilir; şema
+buna hazırdır (bkz. §10).
+
+### 4.5 Dataset tabloları: karar × model bölümlemesi
+
+"Türe ve doğruluğa göre ayrı tablolar" gereksinimi, elle 40+ tablo yerine
+bildirimsel bölümlemeyle karşılanır: sorgular tek mantıksal tabloya
+yazılır, fiziksel olarak karar ve model başına gerçek ayrı tablolar oluşur.
+Çalışma zamanında `detection_types`e yeni sınıf ekleyen mevcut davranış
+(`is_catalogued=false`) DDL değişikliği gerektirmeden çalışmaya devam eder;
+tür, indeksli kolondur.
+
+```sql
+CREATE TABLE webapp.dataset_samples (
+    sample_id        BIGINT GENERATED ALWAYS AS IDENTITY,
+    object_id        BIGINT NOT NULL,
+    verdict          TEXT NOT NULL,
+    model_id         TEXT NOT NULL,     -- roadline / traffic_sign / pothole / marking_damage
+    -- Tespit anındaki özgün değerler (dondurulmuş kopya):
+    type_id          INTEGER NOT NULL,
+    class_name       TEXT NOT NULL,
+    confidence       REAL,
+    bbox             REAL[],
+    area_ratio       REAL,
+    -- Eğitimde kullanılacak nihai etiket (correct'te özgünün kopyası,
+    -- corrected'da düzeltilmiş değer, wrong'da özgünün kopyası):
+    final_type_id    INTEGER NOT NULL,
+    final_class_name TEXT NOT NULL,
+    final_bbox       REAL[],
+    frame_w          INTEGER,
+    frame_h          INTEGER,
+    detected_at      TIMESTAMPTZ NOT NULL,
+    run_id           BIGINT,
+    capture_id       UUID,
+    original_sha     TEXT REFERENCES webapp.dataset_media(sha256),
+    annotated_sha    TEXT REFERENCES webapp.dataset_media(sha256),
+    reviewed_at      TIMESTAMPTZ NOT NULL,
+    reviewer_id      BIGINT NOT NULL,
+    PRIMARY KEY (verdict, model_id, sample_id)
+) PARTITION BY LIST (verdict);
+
+CREATE TABLE webapp.dataset_positive PARTITION OF webapp.dataset_samples
+    FOR VALUES IN ('correct', 'corrected') PARTITION BY LIST (model_id);
+CREATE TABLE webapp.dataset_wrong PARTITION OF webapp.dataset_samples
+    FOR VALUES IN ('wrong') PARTITION BY LIST (model_id);
+
+-- 2 karar grubu × 4 model = 8 yaprak tablo:
+CREATE TABLE webapp.ds_positive_roadline       PARTITION OF webapp.dataset_positive FOR VALUES IN ('roadline');
+CREATE TABLE webapp.ds_positive_traffic_sign   PARTITION OF webapp.dataset_positive FOR VALUES IN ('traffic_sign');
+CREATE TABLE webapp.ds_positive_pothole        PARTITION OF webapp.dataset_positive FOR VALUES IN ('pothole');
+CREATE TABLE webapp.ds_positive_marking_damage PARTITION OF webapp.dataset_positive FOR VALUES IN ('marking_damage');
+CREATE TABLE webapp.ds_wrong_roadline          PARTITION OF webapp.dataset_wrong    FOR VALUES IN ('roadline');
+CREATE TABLE webapp.ds_wrong_traffic_sign      PARTITION OF webapp.dataset_wrong    FOR VALUES IN ('traffic_sign');
+CREATE TABLE webapp.ds_wrong_pothole           PARTITION OF webapp.dataset_wrong    FOR VALUES IN ('pothole');
+CREATE TABLE webapp.ds_wrong_marking_damage    PARTITION OF webapp.dataset_wrong    FOR VALUES IN ('marking_damage');
+
+CREATE INDEX dataset_samples_type_ts_idx
+    ON webapp.dataset_samples (type_id, detected_at);
+CREATE INDEX dataset_samples_object_idx
+    ON webapp.dataset_samples (object_id);
+```
+
+Katalogda olmayan yeni bir model kimliği görülürse `DEFAULT` bölüm yerine
+Faz 4 migration'ı bilinen dört modeli açar; beşinci model ancak bilinçli
+bir migration ile eklenir (masaüstü model kataloğu da aynı disiplindedir).
+
+Tür bazında "tablo" görünümü istendiğinde sınıf başına view üretimi
+yeterlidir; örnek:
+
+```sql
+CREATE VIEW webapp.v_ds_dur_positive AS
+SELECT * FROM webapp.dataset_positive
+WHERE model_id = 'traffic_sign' AND final_class_name = 'dur';
+```
+
+`wrong` örnekleri eğitimde iki biçimde değerlidir: yanlış-pozitif analizi
+ve YOLO hard-negative/background görüntüsü üretimi. Export bunu destekler
+(§6, `/datasets/export`).
+
+Karar değişikliği (geri alma) tek transaction'dır: `detection_reviews`
+güncellenir, ilgili `dataset_samples` satırı yeni bölüme taşınır (verdict
+partition key olduğundan `UPDATE` PostgreSQL'de satırı otomatik taşır) ve
+`admin_audit`e yazılır. Değiştirme yetkisi kararı veren kullanıcı ile
+yöneticilerdedir.
+
+### 4.6 Koordinat ve ölçek kuralı
+
+`detected_objects.bbox`, modelin işlediği kare pikselindedir;
+`ROADVISION_MEDIA_MAX_EDGE=1280` nedeniyle saklanan JPEG bu kareden küçük
+olabilir. Sözleşme:
+
+- `dataset_samples.frame_w/frame_h` **işlenen karenin** boyutudur ve karar
+  anında `media_captures.frame_w/frame_h`den (yoksa görüntüden) doldurulur.
+- Arayüz kutuyu çizerken `görüntü_boyu / frame_boyu` oranıyla ölçekler;
+  düzeltilmiş kutu geri kaydedilirken aynı oranla frame pikseline çevrilir.
+  Yani `corrected_bbox` her zaman frame koordinatındadır.
+- YOLO export normalize koordinat ister; `final_bbox / frame` bölümü bunu
+  ölçekten bağımsız üretir.
+
+Faz 4 kabul testi, bilinçli küçültülmüş bir görüntüyle gidiş-dönüş
+ölçeklemenin ±1 piksel içinde kaldığını doğrular.
+
+### 4.7 Web migration düzeni
+
+`web/app/migrations.py`:
+
+- `webapp.schema_info (version, applied_at)` sürüm tablosu.
+- `pg_advisory_xact_lock(1385428467)` altında, tek transaction'da,
+  sıra atlaması yasak (`current+1` zorunlu) migration uygulaması.
+- `webapp` şeması yoksa bootstrap'e yönlendiren açık Türkçe hata.
+- Uygulama açılışında (`lifespan`) bir kez çalışır; birden çok API
+  replikası aynı anda açılsa da kilit sayesinde tek uygulayıcı olur.
+
+| webapp sürümü | İçerik | Faz |
+| --- | --- | --- |
+| 1 | users, sessions, admin_audit | 1 |
+| 2 | detection_reviews | 4 |
+| 3 | dataset_media, dataset_samples + bölümler | 4 |
+| 4 | export_jobs | 5 |
+
+## 5. Doğrulama iş akışı
+
+Karar semantiği:
+
+- **Doğru (`correct`)** — tespit olduğu gibi geçerli. Nihai etiket = özgün
+  etiket.
+- **Düzeltildi (`corrected`)** — nesne gerçek; kutu kaydırılmış/boyutu
+  hatalı ve/veya sınıf yanlış. Kullanıcı kutuyu sürükleme tutamaçlarıyla
+  düzeltir ve/veya aynı modelin sınıf listesinden yeni sınıf seçer. Nihai
+  etiket = düzeltilmiş değerler; eğitim açısından pozitif örnektir.
+- **Yanlış (`wrong`)** — yanlış pozitif; nesne yok ya da bambaşka bir şey.
+
+Doğrulama sayfası akışı: varsayılan filtre "karar yok"; tür/model/tarih/
+güven ile filtrelenip sıralanabilir kuyruk. Merkezde görüntü
+(Orijinal / İşaretli / Yan yana), seçili tespitin kutusu istemci tarafında
+vurgulanır. Klavye: **D** doğru, **E** düzeltme modu (kutu tutamaçları +
+sınıf listesi açılır; Enter kaydeder, Esc iptal), **Y** yanlış, **→**
+atla. Karar anında tek transaction: review insert → görüntü kopyası
+(varsa) → dataset satırı. Kuyruk TanStack Query ile 5 sn'de bir "son
+gördüğüm ts'den yenileri" keyset sorgusuyla tazelenir; yeni tespitler
+kendiliğinden akar.
+
+Kutu editörü Faz 4'te kütüphanesiz saf SVG overlay olarak yazılır (dört
+köşe + kenar tutamacı, sürükleyerek taşıma); gerekirse `react-konva`
+yedek plandır.
+
+## 6. API sözleşmesi
+
+Tüm uçlar `/api` altındadır; `auth` dışındakiler `approved` oturum ister.
+Hatalar `{ "error": { "code", "message" } }` biçimindedir. Listeler
+masaüstü arşivindeki keyset sözleşmesini kullanır: `cursor` + `limit`,
+`OFFSET` yok; sıralama allowlist'lidir.
+
+| Uç | Yöntem | Açıklama | Faz |
+| --- | --- | --- | --- |
+| `/auth/register` | POST | Kayıt; `pending` oluşturur | 1 |
+| `/auth/login` `/auth/logout` | POST | Oturum aç/kapat (HttpOnly cookie) | 1 |
+| `/auth/me` | GET | Aktif kullanıcı | 1 |
+| `/admin/users` | GET | Duruma göre kullanıcı listesi | 1 |
+| `/admin/users/{id}/approve|reject|disable` | POST | Onay akışı + audit | 1 |
+| `/admin/sessions/{id}` | DELETE | Oturum iptali | 1 |
+| `/logs` | GET | level/category/model/run/zaman filtreli keyset liste | 2 |
+| `/logs/{id}` | GET | Tek kayıt + `payload` JSON | 2 |
+| `/archive/types` | GET | Model → tür ağacı + sayımlar | 3 |
+| `/archive/detections` | GET | Masaüstü filtre sözleşmesi + `review_status` filtresi (`unreviewed/correct/corrected/wrong`) | 3 |
+| `/captures/{capture_id}` | GET | Orijinal+işaretli medya kimlikleri, frame boyutu | 3 |
+| `/media/{media_id}` | GET | Oturum korumalı JPEG; `ETag: sha256`, `Cache-Control: private, immutable` | 3 |
+| `/verify/queue` | GET | Karar bekleyenler (tür/tarih/güven filtreli) | 4 |
+| `/reviews` | POST | Tek karar; gövde: `object_id`, `verdict`, `corrected_bbox?`, `corrected_class?`, `note?` | 4 |
+| `/reviews/bulk` | POST | Aynı gövdeden dizi; kısmi başarı raporu | 4 |
+| `/reviews/{object_id}` | PATCH | Karar değişikliği (sahip/adminde) | 4 |
+| `/datasets/summary` | GET | model × tür × karar kırılımlı sayımlar | 5 |
+| `/datasets/export` | POST | YOLO zip üreten arka plan işi; `?verdict=positive|wrong` | 5 |
+| `/stats/overview` | GET | Panel kartları: günlük tespit, doğrulama hızı, model dağılımı | 5 |
+| `/healthz` | GET | DB + şema sürümleri | 0 |
+
+`POST /reviews` doğrulamaları: tespit var mı, daha önce kararlanmamış mı
+(PK ihlali → 409), `corrected` ise model `detect` mi ve sınıf aynı modelin
+sözlüğünde mi, bbox `x1<x2, y1<y2` ve frame sınırları içinde mi.
+
+## 7. Sayfalar
+
+**Giriş / Kayıt:** kayıt sonrası "hesabınız yönetici onayı bekliyor"
+ekranı; onaysız giriş aynı mesajı döner (hesap varlığı sızdırılmaz).
+
+**Yönetici:** bekleyen üyelikler, onay/ret, devre dışı bırakma, aktif
+oturumlar ve iptal, audit listesi.
+
+**Loglar:** seviye/kategori/model/run/zaman filtreli sanal-kaydırmalı
+tablo; satır detayında `payload` çekmecesi. Masaüstü Oturum Günlüğü
+kolonlarıyla aynı adlandırma kullanılır.
+
+**Arşiv:** model → tür üç durumlu ağaç, zaman/güven/run filtreleri, keyset
+sayfalama; her satırda `Doğrulanmadı / Doğru / Düzeltildi / Yanlış`
+rozeti ve karar filtresi. Satır detayında Orijinal / İşaretli / Yan yana
+görünüm.
+
+**Doğrulama:** §5'teki kuyruk + editör.
+
+**Dataset:** model × tür × karar kırılım tablosu, örnek galeri, export
+işleri ve indirme bağlantıları.
+
+## 8. Güvenlik
+
+- Parolalar Argon2id (argon2-cffi varsayılan parametreleri) ile saklanır.
+- Oturum çerezi: `HttpOnly; Secure; SameSite=Lax`; sunucu tarafı kayıt
+  `webapp.sessions`ta, admin anında iptal edebilir; mutlak 12 saat + 30 dk
+  hareketsizlik süresi.
+- CSRF: SameSite=Lax'a ek olarak durum değiştiren isteklerde
+  `X-RoadVision-CSRF` başlığı ile double-submit çerezi (Faz 1).
+- Giriş ucu IP+e-posta bazlı basit oran sınırlaması (dakikada 5 deneme).
+- `/media` yalnız oturumla erişilir; `Cache-Control: private`.
+- DB en az yetki: `roadvision_web` public'e yazamaz (Faz 0 kabul testi
+  bunu makinede doğrular); parolalı DSN'ler yalnız `.env`te tutulur,
+  komut satırına yazılmaz (mevcut `--dsn` uyarı disipliniyle aynı).
+- API konteyneri yalnız `127.0.0.1:8800`e yayınlanır; dış erişim Faz 2'de
+  nginx + TLS ile açılır.
+
+## 9. Fazlar ve kabul ölçütleri
+
+**Faz 0 — DB temeli ve API iskeleti** *(29 Temmuz 2026'da tamamlandı)*
+Teslimat: `web/db/bootstrap.sql` (+ compose init için
+`web/db/001-webapp-bootstrap.sh`), `web/scripts/bootstrap_db.sh`,
+`web/app/{config,db,migrations,main}.py`, `web/Dockerfile`,
+`web/requirements.txt`, compose `api` servisi, `.env.example` alanları,
+`web/tests/test_migrations.py`, `web/scripts/verify_foundation.py`.
+Kabul: (a) `verify_foundation.py` web DSN ile PASS verir — public
+SELECT çalışır, public INSERT/CREATE `InsufficientPrivilege` ile reddedilir,
+webapp'e yazılabilir; (b) `GET /healthz` iki şema sürümünü döndürür;
+(c) migration testleri torch/psycopg olmadan geçer.
+
+Kabul sonucu: web migration ve bootstrap güvenlik testleri 7/7 geçti;
+`roadvision_web` rolünün `public` SELECT yetkisi ile çalıştığı, INSERT/CREATE
+işlemlerinin reddedildiği ve `webapp` şemasına yazabildiği PostgreSQL 17.10
+üzerinde doğrulandı. Docker API imajı üretildi; API ve PostgreSQL
+konteynerleri sağlıklı çalışırken `/healthz`, `public=3` ve `webapp=0`
+sürümlerini döndürdü.
+
+**Faz 1 — Kimlik ve yönetici** — webapp v1; kayıt/giriş/onay, admin sayfası,
+`create_admin.py`. Kabul: onaysız kullanıcı hiçbir korumalı uca erişemez;
+onay/ret audit'e düşer.
+
+**Faz 2 — Log görüntüleyici + nginx/SPA temeli.** Kabul: 100k kayıtta
+sayfa yanıtı < 100 ms (keyset + mevcut `idx_log_records_*` indeksleri).
+
+**Faz 3 — Arşiv.** Kabul: masaüstü Tespit Arşivi ile aynı filtre
+kümesinde aynı satırlar; görüntü uçları ETag ile 304 döndürür.
+
+**Faz 4 — Doğrulama + dataset.** webapp v2–v3. Kabul: karar transaction'ı
+atomik (review+medya+sample ya hep ya hiç); çifte karar 409; ölçek
+gidiş-dönüşü ±1 px; semantic modelde `corrected` reddedilir.
+
+**Faz 5 — Export + istatistik.** webapp v4. Kabul: YOLO zip'i
+`final_*` etiketleriyle ve normalize koordinatla üretilir; `wrong`
+export'u ayrı seçilebilir.
+
+Kaba süre (tek geliştirici): Faz 0–1 ≈ 3–4 gün, 2–3 ≈ 3 gün, 4 ≈ 3–4 gün,
+5 ≈ 2 gün.
+
+## 10. Açık noktalar
+
+- E-posta doğrulaması gerekli mi, yönetici onayı yeterli mi? (Şimdilik
+  yalnız onay; SMTP eklemek Faz 1'de opsiyonel bırakıldı.)
+- `dataset_media.bytes` için nesne deposu eşiği: toplam > 10 GB olursa
+  MinIO'ya geçiş migration'ı planlanır.
+- Canlı akış: `detected_objects` üzerine NOTIFY trigger'ı public şemaya
+  dokunan tek istisna olacağından ertelendi; 5 sn'lik keyset yenileme
+  yeterli görülürse hiç yapılmayabilir.
+- Kutu editöründe çoklu-kutu (aynı karede komşu tespitleri birlikte
+  gösterme) Faz 4 sonunda değerlendirilecek.

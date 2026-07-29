@@ -2,6 +2,24 @@
 
 ## [Yayımlanmadı]
 
+### Eklendi
+
+- Web paneli Faz 0 (RVU-0004, bkz. [WEB_PLANI.md](WEB_PLANI.md)): salt-okunur
+  `roadvision_web` DB rolü ve `webapp` şeması için tekrar çalıştırılabilir
+  bootstrap (`web/db/bootstrap.sql` + compose initdb kancası), masaüstü
+  `ensure_schema` deseninde sürüm-kapılı web migration runner'ı
+  (`web/app/migrations.py`, advisory lock 1385428467), FastAPI iskeleti ve
+  `/healthz` ucu, compose `api` servisi (127.0.0.1:8800), Faz 0 kabulünü
+  makinede kanıtlayan `web/scripts/verify_foundation.py` ve psycopg'siz
+  çalışan migration birim testleri. Masaüstü kodu ve `public` şeması
+  değişmedi.
+
+### Düzeltildi
+
+- Web bootstrap parola aktarımı `psql \gset` ile sessizleştirildi; rol
+  parolası terminal veya CI çıktısına yazılmıyor. Bu davranış regresyon
+  testiyle korunuyor.
+
 ## [2.0.1] - 2026-07-29
 
 ### Eklendi
