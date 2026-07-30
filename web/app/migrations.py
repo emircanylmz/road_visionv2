@@ -73,8 +73,36 @@ CREATE TABLE webapp.admin_audit (
 CREATE INDEX admin_audit_created_idx ON webapp.admin_audit (created_at);
 """
 
+# v2 — doğrulama kararları (WEB_PLANI.md §4.3; tablo Faz 3'te açılır,
+# yazım uçları Faz 4'tedir). Satır yokluğu = doğrulanmadı; object_id
+# public.detected_objects.id'ye FK'sız işaret eder (retention bağımsızlığı,
+# bkz. §2/2). corrected_payload CHECK'i: yalnız 'corrected' kararı düzeltme
+# taşır ve en az bir düzeltme taşımak zorundadır.
+_MIGRATION_V2_DOGRULAMA = """\
+CREATE TABLE webapp.detection_reviews (
+    object_id         BIGINT PRIMARY KEY,
+    verdict           TEXT NOT NULL
+                      CHECK (verdict IN ('correct', 'corrected', 'wrong')),
+    corrected_bbox    REAL[]
+                      CHECK (corrected_bbox IS NULL
+                             OR array_length(corrected_bbox, 1) = 4),
+    corrected_type_id INTEGER,
+    reviewer_id       BIGINT NOT NULL REFERENCES webapp.users(user_id),
+    reviewed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note              TEXT,
+    CONSTRAINT corrected_payload CHECK (
+        (verdict = 'corrected')
+        = (corrected_bbox IS NOT NULL OR corrected_type_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX detection_reviews_reviewed_idx
+    ON webapp.detection_reviews (reviewed_at);
+"""
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, _MIGRATION_V1_KIMLIK),
+    (2, _MIGRATION_V2_DOGRULAMA),
 )
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0] if MIGRATIONS else 0

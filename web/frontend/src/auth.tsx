@@ -29,7 +29,9 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api("/api/auth/logout", { method: "POST" }),
-    onSettled: () => queryClient.clear(),
+    // Başarısız/yarıda kesilen istekte oturum hâlâ geçerlidir; sorguları
+    // yalnız sunucu oturumu gerçekten silindikten sonra temizle.
+    onSuccess: () => queryClient.clear(),
   });
 }
 

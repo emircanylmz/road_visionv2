@@ -51,6 +51,7 @@ export function Layout({ children }: { children: ReactNode }) {
           RV
         </div>
         <RailLink to="/loglar" glyph="≣" label="Loglar" />
+        <RailLink to="/arsiv" glyph="▦" label="Arşiv" />
         {user.role === "admin" && (
           <RailLink to="/yonetim" glyph="⛭" label="Yönetim" />
         )}
@@ -80,7 +81,8 @@ export function Layout({ children }: { children: ReactNode }) {
               className="btn-ghost"
               onClick={() =>
                 logout.mutate(undefined, {
-                  onSettled: () => navigate("/giris", { replace: true }),
+                  // Başarısız logout'u giriş yapılmış gibi göstermeyelim.
+                  onSuccess: () => navigate("/giris", { replace: true }),
                 })
               }
               disabled={logout.isPending}

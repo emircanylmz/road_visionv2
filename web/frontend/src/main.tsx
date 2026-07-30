@@ -5,6 +5,7 @@ import "./index.css";
 import { AuthGate, RequireAdmin } from "./auth";
 import { Layout } from "./components/Layout";
 import { AdminPage } from "./pages/AdminPage";
+import { ArchivePage } from "./pages/ArchivePage";
 import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -22,7 +23,11 @@ function AppRoutes() {
   const pathname = usePathname();
   if (pathname === "/giris") return <LoginPage />;
   if (pathname === "/kayit") return <RegisterPage />;
-  if (pathname !== "/loglar" && pathname !== "/yonetim") {
+  if (
+    pathname !== "/loglar" &&
+    pathname !== "/arsiv" &&
+    pathname !== "/yonetim"
+  ) {
     return <Navigate to="/loglar" replace />;
   }
   const page =
@@ -30,6 +35,8 @@ function AppRoutes() {
       <RequireAdmin>
         <AdminPage />
       </RequireAdmin>
+    ) : pathname === "/arsiv" ? (
+      <ArchivePage />
     ) : (
       <LogsPage />
     );

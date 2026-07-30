@@ -24,10 +24,11 @@ from .db import create_pool
 from .migrations import CURRENT_VERSION, run_migrations
 from .rate_limit import SlidingWindowLimiter
 from .routes_admin import router as admin_router
+from .routes_archive import router as archive_router
 from .routes_auth import router as auth_router
 from .routes_logs import router as logs_router
 
-WEB_APP_VERSION = "0.3.0-faz2"
+WEB_APP_VERSION = "0.4.0-faz3"
 
 _HTTP_CODE_SLUGS = {
     401: "unauthorized",
@@ -66,6 +67,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(logs_router)
+app.include_router(archive_router)
 
 
 @app.exception_handler(HTTPException)

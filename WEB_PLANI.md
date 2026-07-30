@@ -1,7 +1,7 @@
 # RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
 
-Durum: **Faz 0–2 tamamlandı; Faz 3 sırada**
-Revizyon: 29 Temmuz 2026 (r5 — Faz 2 tamamlandı)
+Durum: **Faz 0–3 tamamlandı; Faz 4 sırada**
+Revizyon: 29 Temmuz 2026 (r7 — Faz 3 tamamlandı)
 
 ## 1. Amaç ve kapsam
 
@@ -174,6 +174,12 @@ CREATE INDEX detection_reviews_reviewed_idx
 `object_id PRIMARY KEY`, iki kullanıcının aynı tespiti aynı anda
 karara bağlamasını veritabanı seviyesinde engeller; ikinci istek 409 alır.
 
+Tablo, planın ilk revizyonundan farklı olarak **webapp v2 migration'ı ile
+Faz 3'te açılır**: arşiv sayfasının doğrulandı/doğrulanmadı etiketi ve
+`review_status` filtresi "satır yokluğu = doğrulanmadı" semantiğine, yani
+bu tabloya LEFT JOIN'e dayanır. Faz 3 tabloya hiçbir satır yazmaz; yazım
+uçları (`/reviews*`) Faz 4'tedir.
+
 Düzeltme kuralları:
 
 - `corrected_type_id`, **tespitin geldiği modelin** sınıf sözlüğünden
@@ -324,7 +330,7 @@ Faz 4 kabul testi, bilinçli küçültülmüş bir görüntüyle gidiş-dönüş
 | webapp sürümü | İçerik | Faz |
 | --- | --- | --- |
 | 1 | users, sessions, admin_audit | 1 |
-| 2 | detection_reviews | 4 |
+| 2 | detection_reviews | 3 |
 | 3 | dataset_media, dataset_samples + bölümler | 4 |
 | 4 | export_jobs | 5 |
 
@@ -377,7 +383,7 @@ masaüstü arşivindeki keyset sözleşmesini kullanır: `cursor` + `limit`,
 | `/archive/types` | GET | Model → tür ağacı + sayımlar | 3 |
 | `/archive/detections` | GET | Masaüstü filtre sözleşmesi + `review_status` filtresi (`unreviewed/correct/corrected/wrong`) | 3 |
 | `/captures/{capture_id}` | GET | Orijinal+işaretli medya kimlikleri, frame boyutu | 3 |
-| `/media/{media_id}` | GET | Oturum korumalı JPEG; `ETag: sha256`, `Cache-Control: private, immutable` | 3 |
+| `/media/{media_id}` | GET | Oturum korumalı raster görüntü; `ETag: sha256`, `Cache-Control: private, no-cache` | 3 |
 | `/verify/queue` | GET | Karar bekleyenler (tür/tarih/güven filtreli) | 4 |
 | `/reviews` | POST | Tek karar; gövde: `object_id`, `verdict`, `corrected_bbox?`, `corrected_class?`, `note?` | 4 |
 | `/reviews/bulk` | POST | Aynı gövdeden dizi; kısmi başarı raporu | 4 |
@@ -504,10 +510,47 @@ sağlıklı kaldı; nginx kökü, `/api` proxy'si ve güvenlik başlıkları ile
 gerçek tarayıcıda giriş, seviye filtresi, log ayrıntısı, yönetim ve çıkış
 akışları konsol hatası olmadan tamamlandı.
 
-**Faz 3 — Arşiv.** Kabul: masaüstü Tespit Arşivi ile aynı filtre
-kümesinde aynı satırlar; görüntü uçları ETag ile 304 döndürür.
+**Faz 3 — Arşiv** *(29 Temmuz 2026'da tamamlandı)* — webapp v2 migration'ı
+(`detection_reviews`, yalnız tablo; bkz. §4.3); masaüstü
+`roadvision/archive.py` FROM/WHERE sözleşmesini birebir taşıyan saf
+`archivequery.py` (+ web'in tek eklemesi: `detection_reviews` LEFT JOIN'i
+ve SQL'de türetilen `review_status`); `/api/archive/types` (katalog +
+yalnız çalışma zamanında görülmüş modellerle tür ağacı, tür × karar
+sayımları), `/api/archive/detections` (model/tür/doğrulama durumu/run/
+capture/zaman/güven/görüntü filtreleri, `(o.ts,o.id)` keyset, limit+1
+sözleşmesi), `/api/captures/{id}` ve `ETag: "sha256"` +
+`Cache-Control: private, no-cache` başlıklı, her kullanımda oturumu yeniden
+doğrulayan ve `If-None-Match`te gövdesiz 304 dönen `/api/media/{id}`.
+Medya byte boyutu/SHA-256 bütünlüğü ve güvenli raster MIME allowlist'i
+sunucu tarafında uygulanır. SPA'ya Arşiv sayfası: tür ağacı ve sayım
+çipleri, doğrulama durumu filtresi, işaretli kare kartları, orijinal/
+işaretli geçişli ayrıntı çekmecesi; görüntüsü retention ile silinmiş
+tespit açıkça işaretlenir. Masaüstünden bilinçli API farkı: tür seçimi
+yokken masaüstü boş liste, API filtre-yok davranır (arayüz varsayılanı
+zaten "tümü"dür).
+Kabul: (a) aynı filtre kümesi için API'nin gezdiği satır sayısı doğrudan
+SQL sayımına eşittir (masaüstü paritesi); (b) keyset sayfaları tekrar/
+atlama üretmez ve `review_status` alanı her satırda geçerlidir — yeni
+tespitler kendiliğinden `unreviewed` görünür; (c) medya ucu ETag döndürür
+ve `If-None-Match` eşleşmesinde gövdesiz 304 verir; (d) şema v3 yoksa
+arşiv uçları 409 `archive_unavailable` döner — hepsi `verify_faz3.py`
+ile makinede doğrulanır (`--seed` boş arşive sahip DSN'iyle `faz3-seed`
+fikstürü ekler; `--cleanup-seed` siler).
 
-**Faz 4 — Doğrulama + dataset.** webapp v2–v3. Kabul: karar transaction'ı
+Kabul sonucu: additive migration çalışan PostgreSQL'de `webapp=2`,
+`public=3` durumunu üretti; `detection_reviews` boş açıldı. Web testleri
+55/55, masaüstü regresyon paketi 255/255, Vite 8 strict üretim derlemesi
+ve geliştirme bağımlılıkları dahil `npm audit` 0 açıkla geçti. Kabul
+betiği 173 gerçek tespiti tekrar/atlama olmadan gezdi; model, tür, run,
+capture, zaman, güven, görüntü ve doğrulama filtreleri tam satır paritesi
+verdi. 87 capture/123 JPEG üzerinde oturum zorunluluğu, SHA-256/byte
+bütünlüğü, ETag ve gövdesiz 304 doğrulandı. Gerçek tarayıcıda tür sayımları,
+3 sütunlu görüntü kartları, birleşik filtreler ve orijinal/işaretli kare
+çekmecesi yatay taşma veya konsol hatası olmadan çalıştı. Başarılı tarayıcı
+çıkışının sunucu oturumunu sildiği veritabanında 0 açık oturumla doğrulandı.
+
+**Faz 4 — Doğrulama + dataset.** webapp v3 (v2 tablosu Faz 3'te açıldı);
+`/reviews*` yazım uçları, corrected doğrulamaları ve copy-on-verify. Kabul: karar transaction'ı
 atomik (review+medya+sample ya hep ya hiç); çifte karar 409; ölçek
 gidiş-dönüşü ±1 px; semantic modelde `corrected` reddedilir.
 

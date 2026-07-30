@@ -3,7 +3,7 @@
 Masaüstü uygulamanın PostgreSQL'e yazdığı günlük, tespit ve görüntüleri
 sunan; tespit doğrulama ve dataset üretimini yöneten ayrı web servisi.
 Tasarım sözleşmesi: [../WEB_PLANI.md](../WEB_PLANI.md). Bu klasör şu an
-**Faz 0–2** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
+**Faz 0–3** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
 oturum katmanı, yönetici onay akışı, log görüntüleyici API'si ve nginx
 arkasında sunulan React SPA.
 
@@ -11,7 +11,7 @@ arkasında sunulan React SPA.
 
 ```bash
 # .env içine ROADVISION_WEB_PASSWORD ekleyin (bkz. .env.example)
-docker compose up -d --build api
+docker compose up -d --build api frontend
 
 # Var olan (dolu) bir PostgreSQL volume'ünde web rolü bir kez elle kurulur;
 # yeni volume'lerde initdb bunu otomatik yapar:
@@ -32,15 +32,40 @@ export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roa
 uvicorn app.main:app --app-dir web --reload --port 8800
 ```
 
+## Faz 3 — tespit arşivi
+
+Panelde **Arşiv** sekmesi: masaüstü Tespit Arşivi ile aynı sorgu
+sözleşmesi + doğrulandı/doğrulanmadı etiketi (webapp v2
+`detection_reviews`; karar satırı olmayan tespit doğrulanmamıştır).
+Uçlar: `GET /api/archive/types`, `GET /api/archive/detections`
+(model_id/type_id/review_status/run_id/capture_id/ts_from/ts_to/
+min_confidence/only_with_image, keyset `cursor`, `limit≤200`),
+`GET /api/captures/{id}`, `GET /api/media/{id}` (`ETag`, 304).
+Arşiv, masaüstünün en az bir kez şema v3 migration'ını çalıştırmış
+olmasını ister; aksi hâlde uçlar 409 `archive_unavailable` döner.
+Medya yalnız güvenli raster MIME türlerinde, SHA-256/byte bütünlüğü
+doğrulanarak sunulur. `private, no-cache`, çıkıştan sonra yerel önbelleğin
+oturum doğrulamasını atlamasını engeller.
+
+Faz 3 kabulü:
+
+```bash
+ROADVISION_WEB_ADMIN_EMAIL=... ROADVISION_WEB_ADMIN_PASSWORD=... \
+ROADVISION_WEB_DSN=... ROADVISION_DB_DSN=... \
+python3 web/scripts/verify_faz3.py --seed   # boş arşive fikstür ekler
+# fikstürü geri almak için: --cleanup-seed
+```
+
 ## Faz 2 — log görüntüleyici ve SPA
 
 Compose ile: `docker compose up -d --build api frontend` → panel
-`http://127.0.0.1:8080` (nginx, SPA + `/api` proxy). Geliştirmede:
+`http://127.0.0.1:8080` (nginx, SPA + `/api` proxy). Host üzerinde
+frontend geliştirme için Node 22.12+ gerekir:
 
 ```bash
 cd web/frontend
 npm ci             # sürümler package-lock.json'dan; bağımlılık değişince lock'u birlikte commit edin
-npm audit --omit=dev
+npm audit --audit-level=moderate
 npm run dev        # http://127.0.0.1:5173, /api → 127.0.0.1:8800 proxy
 ```
 

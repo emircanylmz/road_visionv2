@@ -85,6 +85,20 @@ class EnsureWebappSchemaTests(unittest.TestCase):
         ):
             self.assertIn(parca, sql)
 
+    def test_v2_dogrulama_tablosunu_icerir(self):
+        sql = dict(MIGRATIONS)[2]
+        for parca in (
+            "CREATE TABLE webapp.detection_reviews",
+            "'correct', 'corrected', 'wrong'",
+            "array_length(corrected_bbox, 1) = 4",
+            "CONSTRAINT corrected_payload CHECK",
+            "REFERENCES webapp.users(user_id)",
+            "detection_reviews_reviewed_idx",
+        ):
+            self.assertIn(parca, sql)
+        # FK'sız işaret: retention bağımsızlığı (§2/2) — public'e REFERENCES yok.
+        self.assertNotIn("REFERENCES public.", sql)
+
     def test_kilit_ilk_komut_ve_dogru_sabitle_alinir(self):
         conn = FakeConnection(fetch_results=[(1,), (0,)])
         ensure_webapp_schema(conn, migrations=())

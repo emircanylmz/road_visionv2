@@ -4,6 +4,15 @@
 
 ### Eklendi
 
+- Web paneli Faz 3 (RVU-0004): masaüstü Tespit Arşivi sözleşmesini taşıyan
+  `/api/archive/types` + `/api/archive/detections` (model/tür/doğrulama
+  durumu/run/capture/zaman/güven filtreli keyset) ve `/api/captures/{id}` +
+  `ETag`/304 destekli oturum korumalı `/api/media/{id}`; webapp v2
+  migration'ı (`detection_reviews` — yalnız tablo, satır yokluğu =
+  doğrulanmadı; yazım uçları Faz 4'te); SPA'ya tür ağacı, doğrulama durumu
+  çipleri ve orijinal/işaretli kare çekmeceli Arşiv sayfası; fikstür
+  seed'li kabul betiği `verify_faz3.py`. Masaüstü kodu ve `public` şeması
+  değişmedi.
 - Web paneli Faz 2 (RVU-0004): `(ts,id)` keyset imleçli, seviye/kategori/
   model/run/zaman filtreli `/api/logs` + `/api/logs/{id}` + `/api/meta/models`
   uçları ve DB'siz test edilen saf `logquery` üreticisi; masaüstü v2 tasarım
@@ -60,11 +69,26 @@
   tamamlandı.
 - nginx için CSP, frame, MIME-sniffing, referrer ve cross-origin opener
   başlıkları, kapalı sürüm imzası ve 1 MiB istek gövdesi sınırı eklendi.
+- Faz 3 şema yetenek kontrolü gerekli tüm public tabloların yanında gerçek
+  `public.schema_info >= 3` sürümünü doğruluyor; katalog dışı modellerin
+  tür ağacı değerleri ve sırası masaüstü arşiv sözleşmesiyle eşlendi.
+- Medya yanıtı yalnız güvenli raster MIME türlerini kabul ediyor; SHA-256
+  ve byte boyutu bütünlüğünü doğruluyor, `nosniff`/sandbox başlıkları
+  taşıyor ve `private, no-cache` ile her kullanımda oturumu yeniden
+  doğruluyor. Böylece çıkış sonrası hassas görüntü önbellekten sunulmuyor.
+- Faz 3 kabul betiği ağ/seed hatalarını kontrollü raporluyor, HTTP başlık
+  adlarını büyük-küçük harften bağımsız okuyor, tüm filtre kümesini
+  karşılaştırıyor ve yönetici oturumunu her durumda kapatıyor.
+- Geliştirme sunucusunu etkileyen Vite/esbuild güvenlik duyuruları Vite 8
+  ve uyumlu React eklentisine geçilerek kapatıldı.
+- SPA çıkış akışı sorgu önbelleğini ve yönlendirmeyi yalnız sunucu logout'u
+  başarılı olduğunda yapıyor; başarısız/yarıda kalan istek artık kullanıcıyı
+  yanıltıcı biçimde giriş sayfasına taşımıyor ve açık oturum bırakmıyor.
 
 ### Doğrulama
 
-- Web birim testleri 38/38, masaüstü regresyon testleri 255/255 geçti.
-- PostgreSQL şemaları `webapp=1` ve `public=3` olarak doğrulandı; Faz 1
+- Web birim testleri 55/55, masaüstü regresyon testleri 255/255 geçti.
+- PostgreSQL şemaları `webapp=2` ve `public=3` olarak doğrulandı; Faz 1
   HTTP kabul betiği kayıt/onay, CSRF, audit, rol ve oturum iptal akışlarını
   çalışan API üzerinde PASS sonucu ile tamamladı.
 - Faz 2 kabulü 100.000 kayıtta 30'ar filtreli/filtresiz keyset sayfasını
@@ -74,6 +98,16 @@
   geçti (0 açık). nginx SPA/proxy/güvenlik başlıkları ile gerçek tarayıcıda
   giriş, log filtresi, payload ayrıntısı, yönetim ve çıkış akışları
   doğrulandı; tarayıcı konsolunda hata veya uyarı oluşmadı.
+- Faz 3 kabulü 173 gerçek tespiti keyset ile eksiksiz gezdi; model, tür,
+  run, capture, başlangıç/bitiş zamanı, güven, yalnız görüntülü ve
+  `review_status` filtreleri doğrudan satır paritesiyle geçti. 87 capture/
+  123 JPEG üzerinde capture ayrıntısı, medya bütünlüğü, oturum zorunluluğu,
+  ETag ve gövdesiz 304 doğrulandı.
+- Vite 8 strict üretim derlemesi ve geliştirme bağımlılıkları dahil tam
+  `npm audit` geçti (0 açık). Gerçek tarayıcıda Arşiv kartları, tür
+  sayımları, birleşik filtreler ve orijinal/işaretli kare geçişi yatay
+  taşma veya konsol hatası olmadan tamamlandı; çıkışın sunucu oturumunu
+  sildiği ayrıca veritabanında 0 açık oturumla doğrulandı.
 
 ## [2.0.1] - 2026-07-29
 
