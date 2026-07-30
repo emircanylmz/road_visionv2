@@ -52,8 +52,27 @@ class LoginIn(BaseModel):
 
 
 @router.post("/register", status_code=201)
-async def register(payload: RegisterIn, conn: Any = Depends(get_connection)) -> dict:
+async def register(
+    payload: RegisterIn,
+    request: Request,
+    conn: Any = Depends(get_connection),
+) -> dict:
     from psycopg import errors
+
+    # Oran sınırı Argon2'den ÖNCE koşar: uç kimliksizdir ve her deneme
+    # CPU-yoğun bir özet üretir; sınırsız bırakmak hem işlemci tüketimine
+    # (DoS) hem sınırsız 'pending' kayıt üretimine açıktır. Anahtar yalnız
+    # IP'dir; e-posta anahtara katılmaz ki benzersiz adres üretmek sınırı
+    # seyreltmesin.
+    client_ip = request.client.host if request.client else None
+    wait = request.app.state.register_limiter.check(client_ip or "?")
+    if wait > 0:
+        raise _error(
+            429,
+            "rate_limited",
+            "Çok fazla kayıt denemesi; kısa bir süre sonra yeniden deneyin.",
+            headers={"Retry-After": str(max(1, int(wait + 0.999)))},
+        )
 
     password_hash = await asyncio.to_thread(security.hash_password, payload.password)
     try:
@@ -78,7 +97,19 @@ async def login(
 ) -> dict:
     settings = request.app.state.settings
     client_ip = request.client.host if request.client else None
-    limiter_key = (client_ip or "?", payload.email.lower())
+    ip_key = client_ip or "?"
+    # IP+e-posta kovası hesap brute-force'unu, bu kaba IP tavanı ise her
+    # denemede benzersiz e-posta kullanarak Argon2 CPU maliyetini sınırsız
+    # çalıştırma girişimini sınırlar. İkisi de DB/parola doğrulamasından önce.
+    wait = request.app.state.login_ip_limiter.check(ip_key)
+    if wait > 0:
+        raise _error(
+            429,
+            "rate_limited",
+            "Çok fazla giriş denemesi; kısa bir süre sonra yeniden deneyin.",
+            headers={"Retry-After": str(max(1, int(wait + 0.999)))},
+        )
+    limiter_key = (ip_key, payload.email.lower())
     wait = request.app.state.login_limiter.check(limiter_key)
     if wait > 0:
         raise _error(

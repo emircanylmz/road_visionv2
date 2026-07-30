@@ -57,6 +57,46 @@ class SlidingWindowLimiterTests(unittest.TestCase):
             SlidingWindowLimiter(0, 60.0)
         with self.assertRaises(ValueError):
             SlidingWindowLimiter(1, 0.0)
+        with self.assertRaises(ValueError):
+            SlidingWindowLimiter(1, 60.0, max_tracked_keys=0)
+
+    def test_kapasitede_suresi_dolan_anahtarlar_kayipsiz_ayiklanir(self):
+        clock = FakeClock()
+        limiter = SlidingWindowLimiter(2, 60.0, now_fn=clock, max_tracked_keys=4)
+        for key in ("a", "b", "c", "d"):
+            self.assertEqual(limiter.check(key), 0.0)
+        self.assertEqual(limiter.tracked_keys, 4)
+        clock.now += 61.0  # dördü de pencere dışı kaldı
+        # Kapasitedeki yeni anahtar, aktif pencereye dokunmadan yalnız
+        # bayatları temizletir; eski clear() davranışının aksine tablo
+        # sıfırlanmaz, yeni anahtar kabul edilir.
+        self.assertEqual(limiter.check("e"), 0.0)
+        self.assertEqual(limiter.tracked_keys, 1)
+
+    def test_benzersiz_anahtar_seli_hedefin_penceresini_sifirlatamaz(self):
+        clock = FakeClock()
+        limiter = SlidingWindowLimiter(2, 60.0, now_fn=clock, max_tracked_keys=50)
+        self.assertEqual(limiter.check("hedef"), 0.0)
+        self.assertEqual(limiter.check("hedef"), 0.0)
+        self.assertGreater(limiter.check("hedef"), 0.0)  # hedef kilitli
+        # Eski davranışta bu sel tabloyu clear() ile sıfırlayıp hedefin
+        # kilidini kaldırıyordu; kapasite dolunca yeni anahtarlar fail-closed
+        # reddedilir ve hâlâ sınır uygulayan hedef kova hayatta kalır.
+        for index in range(500):
+            clock.now += 0.01
+            limiter.check(("sel", index))
+        self.assertGreater(limiter.check("hedef"), 0.0)
+        self.assertLessEqual(limiter.tracked_keys, 50)
+
+    def test_tum_kovalar_dolu_olsa_da_aktif_hedef_ayiklanmaz(self):
+        clock = FakeClock()
+        limiter = SlidingWindowLimiter(2, 60.0, now_fn=clock, max_tracked_keys=4)
+        for key in ("hedef", "sel-1", "sel-2", "sel-3"):
+            self.assertEqual(limiter.check(key), 0.0)
+            self.assertEqual(limiter.check(key), 0.0)
+        self.assertGreater(limiter.check("yeni-ip"), 0.0)
+        self.assertEqual(limiter.tracked_keys, 4)
+        self.assertGreater(limiter.check("hedef"), 0.0)
 
 
 if __name__ == "__main__":

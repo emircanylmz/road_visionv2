@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 12
     session_idle_minutes: int = 30
     login_rate_per_minute: int = 5
+    # IP+e-posta sınırının yanında tüm e-postalar için IP başına kaba tavan.
+    login_ip_rate_per_minute: int = 30
+    # Kayıt ucu kimliksizdir ve her deneme CPU-yoğun bir Argon2 özeti
+    # çalıştırır; IP başına dakikalık sınır hem işlemci tüketimini hem
+    # sınırsız 'pending' kullanıcı üretimini keser.
+    register_rate_per_minute: int = 3
 
 
 @lru_cache

@@ -68,6 +68,15 @@
 
 ### Düzeltildi
 
+- Kimliksiz kayıt ucu Argon2 çalıştırılmadan önce IP başına sınırlandırıldı;
+  girişe IP+e-posta kovasının yanında benzersiz e-posta selini kesen kaba
+  IP tavanı eklendi. Limiter anahtar tablosu kapasite baskısında aktif
+  kovaları silmek yerine yeni anahtarları fail-closed reddediyor.
+- Arşiv medyasının sıcak 304 yolu BYTEA kolonunu PostgreSQL'den çekmeden
+  saklanan SHA-256/MIME metadatasıyla yanıtlıyor; 200 yolundaki boyut ve
+  SHA-256 bütünlük kontrolü korunuyor. YOLO zip kurulumu event loop'u
+  bloklamaması için worker thread'e taşındı; Secure cookie kapalı
+  başlatıldığında açık bir TLS yapılandırma uyarısı yazılıyor.
 - Faz 1 kabul verileri `EmailStr` tarafından reddedilen ayrılmış
   `.invalid`/`.local` alanlarından geçerli alanlara taşındı;
   `create_admin.py` giriş yapılamayan hesap üretmemek için e-postayı
@@ -111,6 +120,11 @@
 
 ### Doğrulama
 
+- Güvenlik/performans yaması sonrası web birim testleri 101/101 ve masaüstü
+  regresyonu 255/255 geçti. Gerçek API'de kayıt denemeleri
+  `409,409,409,429 (Retry-After: 60)` dizisini verdi; Faz 3 medya
+  200/ETag/304/401 kabulü ve worker-thread'li Faz 5 pozitif/wrong export
+  kabulü PASS tamamlandı, fikstür ve test oturumları temizlendi.
 - Web birim testleri 55/55, masaüstü regresyon testleri 255/255 geçti.
 - PostgreSQL şemaları `webapp=2` ve `public=3` olarak doğrulandı; Faz 1
   HTTP kabul betiği kayıt/onay, CSRF, audit, rol ve oturum iptal akışlarını

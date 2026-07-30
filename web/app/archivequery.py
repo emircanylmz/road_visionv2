@@ -36,7 +36,8 @@ __all__ = [
     "TYPE_COUNTS_SQL",
     "CAPTURE_SQL",
     "CAPTURE_MODELS_SQL",
-    "MEDIA_SQL",
+    "MEDIA_META_SQL",
+    "MEDIA_DATA_SQL",
     "build_list_query",
     "decode_cursor",
     "encode_cursor",
@@ -186,10 +187,14 @@ WHERE capture_id = %s::uuid
 ORDER BY model_id
 """
 
-MEDIA_SQL = (
-    "SELECT sha256, mime, byte_size, data "
+# Meta ve baytlar ayrı çekilir: ETag saklanan sha256 kolonudur ve panel her
+# görüntüyü no-cache ile yeniden doğrulattığından 304 sıcak yoldur — blob
+# baytlarını yalnız 200 dönecek istek DB'den taşır (routes_archive.get_media).
+MEDIA_META_SQL = (
+    "SELECT sha256, mime, byte_size "
     "FROM public.media_blobs WHERE id = %s"
 )
+MEDIA_DATA_SQL = "SELECT data FROM public.media_blobs WHERE id = %s"
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,6 +13,7 @@ Sözleşmeler (WEB_PLANI.md §3, §4.7, §6):
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -52,6 +53,20 @@ async def lifespan(app: FastAPI):
     app.state.login_limiter = SlidingWindowLimiter(
         max_events=settings.login_rate_per_minute, window_seconds=60.0
     )
+    app.state.login_ip_limiter = SlidingWindowLimiter(
+        max_events=settings.login_ip_rate_per_minute, window_seconds=60.0
+    )
+    app.state.register_limiter = SlidingWindowLimiter(
+        max_events=settings.register_rate_per_minute, window_seconds=60.0
+    )
+    if not settings.cookie_secure:
+        # Yereldeki http geliştirme için normaldir; TLS arkasına alınan bir
+        # kurulumda unutulursa oturum çerezi Secure bayraksız gider. Uyarı,
+        # uvicorn günlüğünde açılışta bir kez görünür (WEB_PLANI.md §8).
+        logging.getLogger("roadvision.web").warning(
+            "ROADVISION_WEB_COOKIE_SECURE=false: oturum çerezleri Secure "
+            "bayrağı olmadan gönderilecek; TLS arkasında true yapılmalıdır."
+        )
     pool = create_pool(settings)
     await pool.open(wait=True)
     app.state.pool = pool

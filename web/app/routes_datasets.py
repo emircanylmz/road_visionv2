@@ -14,6 +14,7 @@ hard-negative/background görüntüleri verir (§9 Faz 5 kabulü).
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Literal
 
@@ -267,7 +268,12 @@ async def _run_export(pool: Any, job_id: int) -> None:
             if truncated:
                 counters["truncated_at"] = MAX_EXPORT_IMAGES
 
-            zip_bytes = assemble_zip(
+            # Zip kurulumu senkron ve CPU-yoğundur (etiket/manifest deflate,
+            # binlerce arşiv girdisi); arka plan görevi event loop'ta
+            # koştuğundan doğrudan çağrı tüm HTTP isteklerini bloklar.
+            # Login'deki Argon2 ile aynı disiplin: worker thread'e taşınır.
+            zip_bytes = await asyncio.to_thread(
+                assemble_zip,
                 model_id=model_id,
                 verdict_scope=verdict_scope,
                 names=names,

@@ -172,6 +172,11 @@ python3 -m unittest discover -s web/tests -t web -v
 
 - `ROADVISION_WEB_DSN` yalnız `roadvision_web` (salt-okunur public)
   rolünü taşır; masaüstünün sahip DSN'i web servisine verilmez.
+- Kimliksiz kayıt IP başına dakikada 3; giriş hesap başına dakikada 5 ve
+  IP başına dakikada 30 denemeyle Argon2 çalıştırılmadan önce sınırlanır.
+  Eşikler `ROADVISION_WEB_*_RATE_PER_MINUTE` değişkenleriyle ayarlanabilir.
+- Arşiv görüntüsünün ETag eşleşen 304 yolu blob baytlarını PostgreSQL'den
+  taşımaz; 200 yanıtında byte boyutu ve SHA-256 bütünlüğü yine doğrulanır.
 - Parolalar `.env` dosyasındadır ve komut satırına yazılmaz;
   `bootstrap_db.sh` parolayı psql değişkeni olarak aktarır.
 - API konteyneri yalnız `127.0.0.1:8800`e yayınlanır; dış erişim Faz 2'de

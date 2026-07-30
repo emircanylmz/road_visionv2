@@ -430,7 +430,11 @@ işleri ve indirme bağlantıları.
   hareketsizlik süresi.
 - CSRF: SameSite=Lax'a ek olarak durum değiştiren isteklerde
   `X-RoadVision-CSRF` başlığı ile double-submit çerezi (Faz 1).
-- Giriş ucu IP+e-posta bazlı basit oran sınırlaması (dakikada 5 deneme).
+- Giriş ucu IP+e-posta bazlı oran sınırlamasının (dakikada 5) yanında
+  benzersiz e-posta selinin Argon2 maliyetini kesen IP tavanı (dakikada
+  30); kayıt ucu Argon2'den önce IP başına dakikada 3 deneme. Limiter
+  anahtar kapasitesi dolduğunda aktif kovaları silmez, yeni anahtarları
+  pencere açılana kadar fail-closed reddeder.
 - `/media` yalnız oturumla erişilir; `Cache-Control: private`.
 - DB en az yetki: `roadvision_web` public'e yazamaz (Faz 0 kabul testi
   bunu makinede doğrular); parolalı DSN'ler yalnız `.env`te tutulur,
@@ -625,12 +629,12 @@ koordinatlar DB'deki `final_bbox / frame` bölümüyle 1e-4 içinde eşleşir;
 sözlüğüyle birebirdir — hepsi `verify_faz5.py` ile makinede doğrulanır
 (`--seed` fikstür + API'den karar üretir; `--cleanup-seed` geri alır).
 
-Kabul sonucu: web birim testleri 92/92, masaüstü regresyon paketi 255/255,
+Kabul sonucu: web birim testleri 101/101, masaüstü regresyon paketi 255/255,
 strict TypeScript denetimi ve Vite 8 üretim derlemesi geçti. Mevcut
 `model_v2` PostgreSQL volume'unda `webapp=4`, `public=3` ve aktif iş
 tekilliğini yarış koşulunda da koruyan `export_jobs_active_uq` partial
 unique indeksi doğrulandı. İzole `faz5-seed` akışında pozitif export
-23 görüntü/35 örnekle üretildi; zip düzeni, görüntü/etiket eşleşmesi,
+23 görüntü/36 örnekle üretildi; zip düzeni, görüntü/etiket eşleşmesi,
 `detection_types` ile birebir `data.yaml`, `final_bbox/frame` normalize
 koordinatları (1e-4 tolerans), iş sürerken erken indirme ve çifte istek
 409'ları, 3 karelik boş etiketli `wrong` export'u ve istatistik ucu gerçek
@@ -639,6 +643,10 @@ temizlikten sonra seed eventleri, export işaretleri, export işleri ve
 test oturumları sıfırlandı. Gerçek tarayıcıda Dataset sayfası,
 kapsam/model seçimi ve export düğümü 1280×720 görünümde yatay taşma veya
 konsol hatası olmadan doğrulandı; tarayıcı test oturumu kapatıldı.
+Güvenlik/performans sertleştirmesi sonrasında gerçek kayıt ucu üç normal
+çakışmanın ardından dördüncü isteği `429 Retry-After: 60` ile kesti;
+Faz 3 medya 200/ETag/gövdesiz-304/oturumsuz-401 kabulü ve event-loop dışı
+zip üretimiyle Faz 5 pozitif/wrong export kabulü yeniden PASS verdi.
 
 Kaba süre (tek geliştirici): Faz 0–1 ≈ 3–4 gün, 2–3 ≈ 3 gün, 4 ≈ 3–4 gün,
 5 ≈ 2 gün.

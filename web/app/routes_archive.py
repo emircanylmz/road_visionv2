@@ -24,7 +24,8 @@ from .archivequery import (
     CAPTURE_SQL,
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
-    MEDIA_SQL,
+    MEDIA_DATA_SQL,
+    MEDIA_META_SQL,
     SCHEMA_CHECK_SQL,
     SCHEMA_VERSION_SQL,
     TYPE_COUNTS_SQL,
@@ -282,13 +283,16 @@ def _etag_matches(if_none_match: str, sha256: str) -> bool:
     return False
 
 
-def _media_response_parts(
+def _validated_media_meta(
     sha256: Any,
     mime: Any,
-    byte_size: Any,
-    data: Any,
-) -> tuple[bytes, str, dict[str, str]]:
-    """DB medya metadatasını güvenli bir HTTP yanıtına dönüştürür."""
+) -> tuple[str, str, dict[str, str]]:
+    """Özet biçimini ve MIME allowlist'ini doğrular; yanıt başlıklarını üretir.
+
+    Baytlara dokunmaz: 304 kısayolu blob'u DB'den hiç çekmeden bu
+    doğrulamayla yetinir. Burada reddedilen kayıt (bozuk özet biçimi,
+    allowlist dışı tür) 304 olarak da sunulmaz.
+    """
 
     digest = str(sha256).lower()
     media_type = str(mime).lower()
@@ -304,11 +308,6 @@ def _media_response_parts(
             "media_type_unsupported",
             "Yalnız güvenli raster görüntü türleri sunulabilir.",
         )
-    payload = bytes(data)
-    size_matches = int(byte_size) == len(payload)
-    digest_matches = hashlib.sha256(payload).hexdigest() == digest
-    if not size_matches or not digest_matches:
-        raise _error(409, "media_corrupt", "Görüntü bütünlük kontrolü başarısız.")
     headers = {
         "ETag": f'"{digest}"',
         # Hassas arşiv görüntüsü yerel önbellekte tutulabilir ancak her
@@ -318,6 +317,35 @@ def _media_response_parts(
         "Content-Security-Policy": "default-src 'none'; sandbox",
         "X-Content-Type-Options": "nosniff",
     }
+    return digest, media_type, headers
+
+
+def _verify_media_payload(digest: str, byte_size: Any, data: Any) -> bytes:
+    """Blob baytlarını saklanan boyut ve özetle doğrular (yalnız 200 yolu)."""
+
+    payload = bytes(data)
+    size_matches = int(byte_size) == len(payload)
+    digest_matches = hashlib.sha256(payload).hexdigest() == digest
+    if not size_matches or not digest_matches:
+        raise _error(409, "media_corrupt", "Görüntü bütünlük kontrolü başarısız.")
+    return payload
+
+
+def _media_response_parts(
+    sha256: Any,
+    mime: Any,
+    byte_size: Any,
+    data: Any,
+) -> tuple[bytes, str, dict[str, str]]:
+    """DB medya metadatasını güvenli bir HTTP yanıtına dönüştürür.
+
+    Meta doğrulaması ile bütünlük kontrolünün bileşimidir; birim testleri
+    bu bileşik sözleşmeyi sabitler, route ise 304 kısayolu için iki
+    parçayı ayrı kullanır.
+    """
+
+    digest, media_type, headers = _validated_media_meta(sha256, mime)
+    payload = _verify_media_payload(digest, byte_size, data)
     return payload, media_type, headers
 
 
@@ -328,17 +356,31 @@ async def get_media(
     _user: accounts.AuthContext = Depends(require_user),
     conn: Any = Depends(get_connection),
 ) -> Response:
+    """Arşiv görüntüsünü sunar; ``If-None-Match`` eşleşmesinde 304 döner.
+
+    ETag saklanan ``sha256`` kolonudur ve önce yalnız meta çekilir: panel
+    her görüntüyü ``no-cache`` ile yeniden doğrulattığından 304 sıcak
+    yoldur ve blob baytlarını DB'den taşımadan, özeti yeniden hesaplamadan
+    döner. Bütünlük kontrolü yalnız bayt sunulan (200) yolda çalışır;
+    saklanan özetle uyuşmayan bozuk blob istemciye hiç ulaşmaz —
+    istemcinin elindeki, özeti tutan kopya zaten sağlam olandır.
+    """
+
     await _require_archive_schema(conn)
-    cur = await conn.execute(MEDIA_SQL, (media_id,))
+    cur = await conn.execute(MEDIA_META_SQL, (media_id,))
     row = await cur.fetchone()
     if row is None:
         raise _error(404, "media_not_found", "Görüntü bulunamadı.")
-    sha256, mime, byte_size, data = row
-    payload, media_type, headers = _media_response_parts(
-        sha256, mime, byte_size, data
-    )
-    response_digest = headers["ETag"].strip('"')
-    if if_none_match is not None and _etag_matches(if_none_match, response_digest):
+    sha256, mime, byte_size = row
+    digest, media_type, headers = _validated_media_meta(sha256, mime)
+    if if_none_match is not None and _etag_matches(if_none_match, digest):
         return Response(status_code=304, headers=headers)
+
+    cur = await conn.execute(MEDIA_DATA_SQL, (media_id,))
+    data_row = await cur.fetchone()
+    if data_row is None:
+        # İki sorgu arasında retention/prune kaydı silmiş olabilir.
+        raise _error(404, "media_not_found", "Görüntü bulunamadı.")
+    payload = _verify_media_payload(digest, byte_size, data_row[0])
     headers["Content-Length"] = str(len(payload))
     return Response(content=payload, media_type=media_type, headers=headers)
