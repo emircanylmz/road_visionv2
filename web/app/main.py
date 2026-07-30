@@ -27,8 +27,9 @@ from .routes_admin import router as admin_router
 from .routes_archive import router as archive_router
 from .routes_auth import router as auth_router
 from .routes_logs import router as logs_router
+from .routes_reviews import router as reviews_router
 
-WEB_APP_VERSION = "0.4.0-faz3"
+WEB_APP_VERSION = "0.5.0-faz4"
 
 _HTTP_CODE_SLUGS = {
     401: "unauthorized",
@@ -68,6 +69,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(logs_router)
 app.include_router(archive_router)
+app.include_router(reviews_router)
 
 
 @app.exception_handler(HTTPException)

@@ -9,6 +9,7 @@ import { ArchivePage } from "./pages/ArchivePage";
 import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { VerifyPage } from "./pages/VerifyPage";
 import {
   Navigate,
   RouterProvider,
@@ -26,6 +27,7 @@ function AppRoutes() {
   if (
     pathname !== "/loglar" &&
     pathname !== "/arsiv" &&
+    pathname !== "/dogrulama" &&
     pathname !== "/yonetim"
   ) {
     return <Navigate to="/loglar" replace />;
@@ -37,6 +39,8 @@ function AppRoutes() {
       </RequireAdmin>
     ) : pathname === "/arsiv" ? (
       <ArchivePage />
+    ) : pathname === "/dogrulama" ? (
+      <VerifyPage />
     ) : (
       <LogsPage />
     );

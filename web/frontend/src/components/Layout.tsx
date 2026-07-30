@@ -52,6 +52,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         <RailLink to="/loglar" glyph="≣" label="Loglar" />
         <RailLink to="/arsiv" glyph="▦" label="Arşiv" />
+        <RailLink to="/dogrulama" glyph="✓" label="Doğrula" />
         {user.role === "admin" && (
           <RailLink to="/yonetim" glyph="⛭" label="Yönetim" />
         )}

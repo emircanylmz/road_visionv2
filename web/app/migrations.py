@@ -100,9 +100,109 @@ CREATE INDEX detection_reviews_reviewed_idx
     ON webapp.detection_reviews (reviewed_at);
 """
 
+# v3 — dataset katmanı (WEB_PLANI.md §4.4–4.5, Faz 4). dataset_media
+# copy-on-verify deposudur (retention'dan bağımsız); dataset_samples karar ×
+# model bildirimsel bölümlemesiyle "tür ve doğruluğa göre ayrı tablolar"
+# gereksinimini karşılar (2 karar grubu × 4 model = 8 yaprak). Beşinci model
+# ancak bilinçli bir migration ile eklenir. Trigger, §4.3'te söz verilen
+# corrected_type_id "aynı model sözlüğü" kuralını DB seviyesine bağlar.
+_MIGRATION_V3_DATASET = """\
+CREATE TABLE webapp.dataset_media (
+    sha256    TEXT PRIMARY KEY,
+    bytes     BYTEA NOT NULL,
+    width     INTEGER,
+    height    INTEGER,
+    byte_size INTEGER NOT NULL
+);
+
+CREATE TABLE webapp.dataset_samples (
+    sample_id        BIGINT GENERATED ALWAYS AS IDENTITY,
+    object_id        BIGINT NOT NULL,
+    verdict          TEXT NOT NULL,
+    model_id         TEXT NOT NULL,
+    type_id          INTEGER NOT NULL,
+    class_name       TEXT NOT NULL,
+    confidence       REAL,
+    bbox             REAL[],
+    area_ratio       REAL,
+    final_type_id    INTEGER NOT NULL,
+    final_class_name TEXT NOT NULL,
+    final_bbox       REAL[],
+    frame_w          INTEGER,
+    frame_h          INTEGER,
+    detected_at      TIMESTAMPTZ NOT NULL,
+    run_id           BIGINT,
+    capture_id       UUID,
+    original_sha     TEXT REFERENCES webapp.dataset_media(sha256),
+    annotated_sha    TEXT REFERENCES webapp.dataset_media(sha256),
+    reviewed_at      TIMESTAMPTZ NOT NULL,
+    reviewer_id      BIGINT NOT NULL,
+    PRIMARY KEY (verdict, model_id, sample_id)
+) PARTITION BY LIST (verdict);
+
+CREATE TABLE webapp.dataset_positive PARTITION OF webapp.dataset_samples
+    FOR VALUES IN ('correct', 'corrected') PARTITION BY LIST (model_id);
+CREATE TABLE webapp.dataset_wrong PARTITION OF webapp.dataset_samples
+    FOR VALUES IN ('wrong') PARTITION BY LIST (model_id);
+
+CREATE TABLE webapp.ds_positive_roadline
+    PARTITION OF webapp.dataset_positive FOR VALUES IN ('roadline');
+CREATE TABLE webapp.ds_positive_traffic_sign
+    PARTITION OF webapp.dataset_positive FOR VALUES IN ('traffic_sign');
+CREATE TABLE webapp.ds_positive_pothole
+    PARTITION OF webapp.dataset_positive FOR VALUES IN ('pothole');
+CREATE TABLE webapp.ds_positive_marking_damage
+    PARTITION OF webapp.dataset_positive FOR VALUES IN ('marking_damage');
+CREATE TABLE webapp.ds_wrong_roadline
+    PARTITION OF webapp.dataset_wrong FOR VALUES IN ('roadline');
+CREATE TABLE webapp.ds_wrong_traffic_sign
+    PARTITION OF webapp.dataset_wrong FOR VALUES IN ('traffic_sign');
+CREATE TABLE webapp.ds_wrong_pothole
+    PARTITION OF webapp.dataset_wrong FOR VALUES IN ('pothole');
+CREATE TABLE webapp.ds_wrong_marking_damage
+    PARTITION OF webapp.dataset_wrong FOR VALUES IN ('marking_damage');
+
+CREATE INDEX dataset_samples_type_ts_idx
+    ON webapp.dataset_samples (type_id, detected_at);
+CREATE INDEX dataset_samples_object_idx
+    ON webapp.dataset_samples (object_id);
+
+-- §4.3: corrected_type_id tespitin geldiği modelin sözlüğünden olmalı.
+-- API katmanı aynı kuralı önden doğrular; trigger son savunma hattıdır.
+CREATE FUNCTION webapp.detection_reviews_corrected_type_ck()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+    IF NEW.verdict = 'corrected' AND NEW.corrected_type_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM public.detected_objects AS o
+            JOIN public.detection_types AS t
+                ON t.model_id = o.model_id
+            WHERE o.id = NEW.object_id
+              AND t.type_id = NEW.corrected_type_id
+        ) THEN
+            RAISE EXCEPTION
+                'corrected_type_id % tespitin modeline ait değil',
+                NEW.corrected_type_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$fn$;
+
+CREATE TRIGGER detection_reviews_corrected_type_trg
+    BEFORE INSERT OR UPDATE ON webapp.detection_reviews
+    FOR EACH ROW
+    EXECUTE FUNCTION webapp.detection_reviews_corrected_type_ck();
+"""
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, _MIGRATION_V1_KIMLIK),
     (2, _MIGRATION_V2_DOGRULAMA),
+    (3, _MIGRATION_V3_DATASET),
 )
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0] if MIGRATIONS else 0

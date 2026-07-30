@@ -1,7 +1,7 @@
 # RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
 
-Durum: **Faz 0–3 tamamlandı; Faz 4 sırada**
-Revizyon: 29 Temmuz 2026 (r7 — Faz 3 tamamlandı)
+Durum: **Faz 0–4 tamamlandı; Faz 5 sırada**
+Revizyon: 30 Temmuz 2026 (r8 — Faz 4 tamamlandı)
 
 ## 1. Amaç ve kapsam
 
@@ -549,10 +549,46 @@ bütünlüğü, ETag ve gövdesiz 304 doğrulandı. Gerçek tarayıcıda tür sa
 çekmecesi yatay taşma veya konsol hatası olmadan çalıştı. Başarılı tarayıcı
 çıkışının sunucu oturumunu sildiği veritabanında 0 açık oturumla doğrulandı.
 
-**Faz 4 — Doğrulama + dataset.** webapp v3 (v2 tablosu Faz 3'te açıldı);
-`/reviews*` yazım uçları, corrected doğrulamaları ve copy-on-verify. Kabul: karar transaction'ı
-atomik (review+medya+sample ya hep ya hiç); çifte karar 409; ölçek
-gidiş-dönüşü ±1 px; semantic modelde `corrected` reddedilir.
+**Faz 4 — Doğrulama + dataset** *(30 Temmuz 2026'da tamamlandı)* — webapp v3
+migration'ı (v2 tablosu Faz 3'te açıldı): `dataset_media` +
+karar × model bölümlü `dataset_samples` (2 grup × 4 model = 8 yaprak;
+PK `(verdict, model_id, sample_id)`) ve §4.3'te söz verilen
+corrected_type_id "aynı model sözlüğü" trigger'ı. Kural doğrulaması saf
+modüllerde: `geometry.py` (§4.6 ölçek/`validate_bbox`, ±1 px gidiş-dönüş
+testte sabit) ve `reviewrules.py` (semantic reddi, `unknown_class`,
+`no_change`, `frame_unavailable`, `final_*` çözümü). Uçlar:
+`/api/verify/queue` (varsayılan en eskiden yeniye — FIFO), `POST
+/api/reviews` (tek transaction: karar + copy-on-verify + bölüme düşen
+örnek; PK ihlali 409), `/api/reviews/bulk` (öğe başına transaction, kısmi
+başarı raporu), `PATCH /api/reviews/{id}` (sahip/admin; verdict partition
+key olduğundan örnek satırı UPDATE ile yeni bölüme taşınır; `admin_audit`e
+`change_review`). Kare boyutu §4.6 "(yoksa görüntüden)" dalıyla orijinal
+blobun boyutundan alınır (masaüstü `media_captures` frame_w/h saklamaz).
+Bölümleme dışı model kimliği partition hatasına düşmeden 422
+`unsupported_model` ile reddedilir. SPA'ya Doğrulama sayfası: kuyruk +
+editör, klavye D/E/Y/→, SVG kutu editörü (viewBox = kare boyutu; sürükleme
+kare pikselinde), aynı model sözlüğünden sınıf seçimi; semantic modelde
+düzeltme gizlenir; görüntüsüz tespit karara açıktır ve örnek görüntüsüz
+işaretlenir.
+Kabul: (a) karar transaction'ı atomiktir — review+medya+sample ya hep ya
+hiç ve örnek doğru yaprakta doğrulanır; (b) çifte karar 409, CSRF'siz
+yazım 403; (c) ölçek gidiş-dönüşü ±1 px (`final_bbox` üzerinde); (d)
+semantic modelde `corrected` ve çapraz-model sınıf reddedilir; (e) PATCH
+örneği yeni bölüme taşır ve audit'e düşer; (f) bulk kısmi başarı raporu
+verir — hepsi `verify_faz4.py` ile makinede doğrulanır (`--seed` /
+`--cleanup-seed`).
+
+Kabul sonucu: web birim testleri 80/80, masaüstü regresyon paketi 255/255,
+strict TypeScript denetimi ve Vite 8 üretim derlemesi geçti. Mevcut
+`model_v2` PostgreSQL volume'unda `webapp=3`, `public=3` ve sekiz
+karar × model yaprak tablosu doğrulandı. Güvenli dört tespitlik
+`faz4-seed` fikstürüyle CSRF reddi, atomik üçlü yazım, çifte karar 409,
+çapraz-model/semantic düzeltme reddi, ±1 px kutu gidiş-dönüşü, PATCH ile
+bölüm taşıma + audit ve bulk kısmi başarı gerçek HTTP/DB akışında PASS
+verdi; fikstür, örnek, medya kopyası ve audit kayıtları ardından sıfırlandı.
+Gerçek tarayıcıda kuyruk, görüntü, detect düzeltme formu, aynı model sınıf
+sözlüğü ve semantic düzeltme gizleme; yatay taşma veya konsol hatası
+olmadan doğrulandı.
 
 **Faz 5 — Export + istatistik.** webapp v4. Kabul: YOLO zip'i
 `final_*` etiketleriyle ve normalize koordinatla üretilir; `wrong`

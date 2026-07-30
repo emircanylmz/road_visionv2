@@ -3,9 +3,10 @@
 Masaüstü uygulamanın PostgreSQL'e yazdığı günlük, tespit ve görüntüleri
 sunan; tespit doğrulama ve dataset üretimini yöneten ayrı web servisi.
 Tasarım sözleşmesi: [../WEB_PLANI.md](../WEB_PLANI.md). Bu klasör şu an
-**Faz 0–3** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
-oturum katmanı, yönetici onay akışı, log görüntüleyici API'si ve nginx
-arkasında sunulan React SPA.
+**Faz 0–4** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
+oturum katmanı, yönetici onay akışı, log ve tespit arşivi API'leri,
+doğrulama + copy-on-verify dataset katmanı ve nginx arkasında sunulan
+React SPA.
 
 ## Kurulum — compose ile (önerilen)
 
@@ -30,6 +31,26 @@ pip install -r web/requirements.txt
 ./web/scripts/bootstrap_db.sh
 export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roadvision"
 uvicorn app.main:app --app-dir web --reload --port 8800
+```
+
+## Faz 4 — doğrulama ve dataset
+
+Panelde **Doğrula** sekmesi: karar bekleyen kuyruğu (en eski önce) +
+editör. Klavye: `D` doğru, `E` düzelt (kutu sürükleme + aynı model
+sözlüğünden sınıf), `Y` yanlış, `→` atla. Her karar tek transaction'da
+karar satırı + copy-on-verify görüntü kopyası + karar × model bölümüne
+düşen dataset örneği yazar; karar satırı olmayan tespit doğrulanmamıştır.
+Uçlar: `GET /api/verify/queue`, `POST /api/reviews`, `POST
+/api/reviews/bulk`, `PATCH /api/reviews/{object_id}` (kararı veren veya
+yönetici). `corrected_bbox` her zaman kare koordinatındadır (§4.6).
+
+Faz 4 kabulü:
+
+```bash
+ROADVISION_WEB_ADMIN_EMAIL=... ROADVISION_WEB_ADMIN_PASSWORD=... \
+ROADVISION_WEB_DSN=... ROADVISION_DB_DSN=... \
+python3 web/scripts/verify_faz4.py --seed
+# fikstürü geri almak için: --cleanup-seed
 ```
 
 ## Faz 3 — tespit arşivi

@@ -4,6 +4,16 @@
 
 ### Eklendi
 
+- Web paneli Faz 4 (RVU-0004): webapp v3 (`dataset_media` copy-on-verify
+  deposu, karar × model bölümlü `dataset_samples` — 8 yaprak tablo — ve
+  corrected_type_id "aynı model sözlüğü" trigger'ı); saf `geometry` (§4.6
+  ölçek, ±1 px gidiş-dönüş) ve `reviewrules` (semantic reddi, çapraz-model
+  sınıf, no_change, frame_unavailable) modülleri; `/api/verify/queue` ve
+  atomik `/api/reviews` + `/api/reviews/bulk` + sahip/admin yetkili `PATCH
+  /api/reviews/{id}` (bölüm taşınması + audit); SPA'ya D/E/Y/→ kısayollu,
+  SVG kutu editörlü ve aynı model sözlüğünden sınıf seçimli Doğrulama
+  sayfası; uçtan uca kabul betiği `verify_faz4.py`. Masaüstü kodu ve
+  `public` şeması değişmedi.
 - Web paneli Faz 3 (RVU-0004): masaüstü Tespit Arşivi sözleşmesini taşıyan
   `/api/archive/types` + `/api/archive/detections` (model/tür/doğrulama
   durumu/run/capture/zaman/güven filtreli keyset) ve `/api/captures/{id}` +

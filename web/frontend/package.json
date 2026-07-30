@@ -1,8 +1,8 @@
 {
   "name": "roadvision-web-frontend",
   "private": true,
-  "version": "0.4.0",
-  "description": "RoadVision Web Paneli SPA (WEB_PLANI.md, Faz 2)",
+  "version": "0.5.0",
+  "description": "RoadVision Web Paneli SPA (WEB_PLANI.md, Faz 4)",
   "type": "module",
   "scripts": {
     "dev": "vite",

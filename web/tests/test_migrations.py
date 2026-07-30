@@ -99,6 +99,25 @@ class EnsureWebappSchemaTests(unittest.TestCase):
         # FK'sız işaret: retention bağımsızlığı (§2/2) — public'e REFERENCES yok.
         self.assertNotIn("REFERENCES public.", sql)
 
+    def test_v3_dataset_bolumlerini_icerir(self):
+        sql = dict(MIGRATIONS)[3]
+        for parca in (
+            "CREATE TABLE webapp.dataset_media",
+            "CREATE TABLE webapp.dataset_samples",
+            "PARTITION BY LIST (verdict)",
+            "PARTITION BY LIST (model_id)",
+            "PRIMARY KEY (verdict, model_id, sample_id)",
+            "FOR VALUES IN ('correct', 'corrected')",
+            "FOR VALUES IN ('wrong')",
+            "detection_reviews_corrected_type_trg",
+        ):
+            self.assertIn(parca, sql)
+        # 2 karar grubu × 4 model = 8 yaprak (§4.5).
+        for model in ("roadline", "traffic_sign", "pothole", "marking_damage"):
+            self.assertIn(f"webapp.ds_positive_{model}", sql)
+            self.assertIn(f"webapp.ds_wrong_{model}", sql)
+        self.assertNotIn("REFERENCES public.", sql)
+
     def test_kilit_ilk_komut_ve_dogru_sabitle_alinir(self):
         conn = FakeConnection(fetch_results=[(1,), (0,)])
         ensure_webapp_schema(conn, migrations=())
