@@ -27,7 +27,7 @@ services:
       start_period: 10s
     stop_grace_period: 30s
 
-  # RoadVision Web API (Faz 0–4; bkz. WEB_PLANI.md).
+  # RoadVision Web API (Faz 0–5; bkz. WEB_PLANI.md).
   # Yalnız salt-okunur roadvision_web rolünü bilir; masaüstünün sahip
   # DSN'i bu servise verilmez.
   api:
@@ -55,7 +55,7 @@ services:
       retries: 5
       start_period: 15s
 
-  # RoadVision Web Paneli SPA + reverse proxy (Faz 2–4; bkz. WEB_PLANI.md §3).
+  # RoadVision Web Paneli SPA + reverse proxy (Faz 2–5; bkz. WEB_PLANI.md §3).
   frontend:
     build: ./web/frontend
     restart: unless-stopped

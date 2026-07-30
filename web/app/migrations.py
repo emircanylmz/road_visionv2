@@ -199,10 +199,45 @@ CREATE TRIGGER detection_reviews_corrected_type_trg
     EXECUTE FUNCTION webapp.detection_reviews_corrected_type_ck();
 """
 
+# v4 — export işleri (WEB_PLANI.md §6, Faz 5). Zip çıktısı da PostgreSQL'de
+# saklanır: konteynerler geçicidir ve servisin paylaştığı tek durum DB'dir
+# (§2 "tek temas" ilkesi). BYTEA satırı indirme ucundan sunulur; iş durumu
+# pending → running → done/failed akışıyla izlenir.
+_MIGRATION_V4_EXPORT = """\
+CREATE TABLE webapp.export_jobs (
+    job_id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    requested_by     BIGINT NOT NULL REFERENCES webapp.users(user_id),
+    model_id         TEXT NOT NULL,
+    verdict_scope    TEXT NOT NULL
+        CHECK (verdict_scope IN ('positive', 'wrong')),
+    status           TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'done', 'failed')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at       TIMESTAMPTZ,
+    finished_at      TIMESTAMPTZ,
+    sample_count     INTEGER,
+    image_count      INTEGER,
+    skipped_no_image INTEGER,
+    skipped_no_bbox  INTEGER,
+    byte_size        BIGINT,
+    zip_bytes        BYTEA,
+    error            TEXT
+);
+
+CREATE INDEX export_jobs_created_idx
+    ON webapp.export_jobs (created_at DESC);
+CREATE INDEX export_jobs_status_idx
+    ON webapp.export_jobs (status);
+CREATE UNIQUE INDEX export_jobs_active_uq
+    ON webapp.export_jobs (model_id, verdict_scope)
+    WHERE status IN ('pending', 'running');
+"""
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, _MIGRATION_V1_KIMLIK),
     (2, _MIGRATION_V2_DOGRULAMA),
     (3, _MIGRATION_V3_DATASET),
+    (4, _MIGRATION_V4_EXPORT),
 )
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0] if MIGRATIONS else 0

@@ -3,7 +3,7 @@
 Masaüstü uygulamanın PostgreSQL'e yazdığı günlük, tespit ve görüntüleri
 sunan; tespit doğrulama ve dataset üretimini yöneten ayrı web servisi.
 Tasarım sözleşmesi: [../WEB_PLANI.md](../WEB_PLANI.md). Bu klasör şu an
-**Faz 0–4** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
+**Faz 0–5** kapsamını içerir: DB temeli, migration runner'ı, kimlik/
 oturum katmanı, yönetici onay akışı, log ve tespit arşivi API'leri,
 doğrulama + copy-on-verify dataset katmanı ve nginx arkasında sunulan
 React SPA.
@@ -33,11 +33,32 @@ export ROADVISION_WEB_DSN="postgresql://roadvision_web:PAROLA@127.0.0.1:5433/roa
 uvicorn app.main:app --app-dir web --reload --port 8800
 ```
 
+## Faz 5 — dataset export ve istatistik
+
+Panelde **Dataset** sekmesi: model × tür × karar kırılımı, YOLO export
+işleri ve indirme. Export arka plan işidir; zip **veritabanında** saklanır
+ve `GET /api/datasets/exports/{id}/download` ile indirilir. Pozitif kapsam
+`final_*` etiketleriyle normalize YOLO etiketi üretir; `wrong` kapsamı boş
+etiketli hard-negative/background görüntüleri verir. Aynı model + kapsam
+için iş bitmeden ikinci istek 409 döner. İş başına en çok 5000 kare
+zip'e girer (aşan kısım manifest'te işaretlenir).
+
+Faz 5 kabulü:
+
+```bash
+ROADVISION_WEB_ADMIN_EMAIL=... ROADVISION_WEB_ADMIN_PASSWORD=... \
+ROADVISION_WEB_DSN=... ROADVISION_DB_DSN=... \
+python3 web/scripts/verify_faz5.py --seed
+# fikstürü geri almak için: --cleanup-seed
+```
+
 ## Faz 4 — doğrulama ve dataset
 
 Panelde **Doğrula** sekmesi: karar bekleyen kuyruğu (en eski önce) +
 editör. Klavye: `D` doğru, `E` düzelt (kutu sürükleme + aynı model
-sözlüğünden sınıf), `Y` yanlış, `→` atla. Her karar tek transaction'da
+sözlüğünden etiket; kutuyu değiştirmek zorunlu değildir), `Y` yanlış,
+`→` atla. Örneğin `pothole` modelinde Çukur etiketi Rögar kapağı
+(`manhole_cover`) olarak değiştirilebilir. Her karar tek transaction'da
 karar satırı + copy-on-verify görüntü kopyası + karar × model bölümüne
 düşen dataset örneği yazar; karar satırı olmayan tespit doğrulanmamıştır.
 Uçlar: `GET /api/verify/queue`, `POST /api/reviews`, `POST

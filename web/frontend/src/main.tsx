@@ -5,6 +5,7 @@ import "./index.css";
 import { AuthGate, RequireAdmin } from "./auth";
 import { Layout } from "./components/Layout";
 import { AdminPage } from "./pages/AdminPage";
+import { DatasetPage } from "./pages/DatasetPage";
 import { ArchivePage } from "./pages/ArchivePage";
 import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
@@ -28,6 +29,7 @@ function AppRoutes() {
     pathname !== "/loglar" &&
     pathname !== "/arsiv" &&
     pathname !== "/dogrulama" &&
+    pathname !== "/dataset" &&
     pathname !== "/yonetim"
   ) {
     return <Navigate to="/loglar" replace />;
@@ -41,6 +43,8 @@ function AppRoutes() {
       <ArchivePage />
     ) : pathname === "/dogrulama" ? (
       <VerifyPage />
+    ) : pathname === "/dataset" ? (
+      <DatasetPage />
     ) : (
       <LogsPage />
     );

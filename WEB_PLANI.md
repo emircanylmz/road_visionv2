@@ -1,7 +1,7 @@
 # RoadVision Web Paneli — tasarım ve uygulama planı (RVU-0004)
 
-Durum: **Faz 0–4 tamamlandı; Faz 5 sırada**
-Revizyon: 30 Temmuz 2026 (r8 — Faz 4 tamamlandı)
+Durum: **Faz 0–5 tamamlandı**
+Revizyon: 30 Temmuz 2026 (r9 — Faz 5 tamamlandı)
 
 ## 1. Amaç ve kapsam
 
@@ -389,7 +389,10 @@ masaüstü arşivindeki keyset sözleşmesini kullanır: `cursor` + `limit`,
 | `/reviews/bulk` | POST | Aynı gövdeden dizi; kısmi başarı raporu | 4 |
 | `/reviews/{object_id}` | PATCH | Karar değişikliği (sahip/adminde) | 4 |
 | `/datasets/summary` | GET | model × tür × karar kırılımlı sayımlar | 5 |
-| `/datasets/export` | POST | YOLO zip üreten arka plan işi; `?verdict=positive|wrong` | 5 |
+| `/datasets/export` | POST | YOLO zip üreten arka plan işi; gövde: `model_id`, `verdict=positive|wrong` | 5 |
+| `/datasets/exports` | GET | İş listesi (zip gövdesiz) | 5 |
+| `/datasets/exports/{id}` | GET | İş durumu | 5 |
+| `/datasets/exports/{id}/download` | GET | Bitmiş işin zip'i; hazır değilse 409 | 5 |
 | `/stats/overview` | GET | Panel kartları: günlük tespit, doğrulama hızı, model dağılımı | 5 |
 | `/healthz` | GET | DB + şema sürümleri | 0 |
 
@@ -569,7 +572,10 @@ Bölümleme dışı model kimliği partition hatasına düşmeden 422
 editör, klavye D/E/Y/→, SVG kutu editörü (viewBox = kare boyutu; sürükleme
 kare pikselinde), aynı model sözlüğünden sınıf seçimi; semantic modelde
 düzeltme gizlenir; görüntüsüz tespit karara açıktır ve örnek görüntüsüz
-işaretlenir.
+işaretlenir. Detect modellerde etiket düzeltmesi kutudan bağımsızdır:
+aynı model sözlüğünden nihai etiket seçilir (ör. `pothole` →
+`manhole_cover / Rögar kapağı`) ve kutu taşınmadan da `corrected`
+dataset örneği üretilebilir.
 Kabul: (a) karar transaction'ı atomiktir — review+medya+sample ya hep ya
 hiç ve örnek doğru yaprakta doğrulanır; (b) çifte karar 409, CSRF'siz
 yazım 403; (c) ölçek gidiş-dönüşü ±1 px (`final_bbox` üzerinde); (d)
@@ -590,9 +596,49 @@ Gerçek tarayıcıda kuyruk, görüntü, detect düzeltme formu, aynı model sı
 sözlüğü ve semantic düzeltme gizleme; yatay taşma veya konsol hatası
 olmadan doğrulandı.
 
-**Faz 5 — Export + istatistik.** webapp v4. Kabul: YOLO zip'i
-`final_*` etiketleriyle ve normalize koordinatla üretilir; `wrong`
-export'u ayrı seçilebilir.
+**Faz 5 — Export + istatistik** *(30 Temmuz 2026'da tamamlandı)* — webapp v4
+migration'ı: `export_jobs` (pending→running→done/failed; **zip çıktısı da
+BYTEA olarak DB'de** — §2 "tek temas PostgreSQL": konteynerler geçicidir,
+servisin paylaştığı tek durum veritabanıdır). YOLO üretim kuralları saf
+`exportbuild.py` modülünde: sınıf haritası deterministik (`class_index`
+NULLS LAST → `class_name`; katalog dışı sınıflar sözlüğün sonunda),
+etiket satırı `final_bbox / frame` bölümüyle normalize (§4.6'dan
+ölçekten bağımsız), aynı kare birden çok örnek taşırsa tek görüntü + çok
+satırlı tek etiket, `wrong` kapsamı **boş etiket dosyalı** hard-negative/
+background görüntüleri üretir, görüntüsüz veya (pozitifte) kutusuz örnek
+atlanır ve manifest'e sayılır. İş FastAPI arka plan görevinde havuzdan
+kendi bağlantısıyla koşar; aynı model + kapsam için ikinci istek iş
+bitmeden 409 `export_in_progress`, bitmemiş işin indirilmesi 409
+`export_not_ready` alır. Bellek emniyeti: iş başına en çok
+`MAX_EXPORT_IMAGES=5000` kare (aşan kısım manifest'te `truncated_at`).
+`/datasets/summary` model × tür × karar kırılımını, `/stats/overview`
+panel kartlarını (tespit hacmi, doğrulama kapsaması, model dağılımı,
+aktif işler) verir. SPA'ya Dataset sayfası: istatistik kartları, kırılım
+tablosu, kapsam + model seçimli export başlatma, koşan iş varken 2,5 sn
+aralıklı yenilenen iş listesi ve indirme bağlantıları; örnek galerisi
+için Arşiv sayfasına (karar filtreli görünüm) bağlanır.
+Kabul: (a) YOLO zip'i `final_*` etiketleriyle üretilir ve normalize
+koordinatlar DB'deki `final_bbox / frame` bölümüyle 1e-4 içinde eşleşir;
+(b) `wrong` export'u ayrı seçilebilir ve boş etiketli background üretir;
+(c) iş yaşam döngüsü 202 → done → indirilebilir zip'tir, erken indirme ve
+çifte istek 409 alır; (d) `data.yaml` sözlüğü modelin `detection_types`
+sözlüğüyle birebirdir — hepsi `verify_faz5.py` ile makinede doğrulanır
+(`--seed` fikstür + API'den karar üretir; `--cleanup-seed` geri alır).
+
+Kabul sonucu: web birim testleri 92/92, masaüstü regresyon paketi 255/255,
+strict TypeScript denetimi ve Vite 8 üretim derlemesi geçti. Mevcut
+`model_v2` PostgreSQL volume'unda `webapp=4`, `public=3` ve aktif iş
+tekilliğini yarış koşulunda da koruyan `export_jobs_active_uq` partial
+unique indeksi doğrulandı. İzole `faz5-seed` akışında pozitif export
+23 görüntü/35 örnekle üretildi; zip düzeni, görüntü/etiket eşleşmesi,
+`detection_types` ile birebir `data.yaml`, `final_bbox/frame` normalize
+koordinatları (1e-4 tolerans), iş sürerken erken indirme ve çifte istek
+409'ları, 3 karelik boş etiketli `wrong` export'u ve istatistik ucu gerçek
+HTTP/DB üzerinde PASS verdi. Audit ile yalnız kabul işlerini hedefleyen
+temizlikten sonra seed eventleri, export işaretleri, export işleri ve
+test oturumları sıfırlandı. Gerçek tarayıcıda Dataset sayfası,
+kapsam/model seçimi ve export düğümü 1280×720 görünümde yatay taşma veya
+konsol hatası olmadan doğrulandı; tarayıcı test oturumu kapatıldı.
 
 Kaba süre (tek geliştirici): Faz 0–1 ≈ 3–4 gün, 2–3 ≈ 3 gün, 4 ≈ 3–4 gün,
 5 ≈ 2 gün.

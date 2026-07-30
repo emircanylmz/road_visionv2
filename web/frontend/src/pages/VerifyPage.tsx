@@ -330,11 +330,11 @@ function Editor({
           {!isSemantic && (
             <button
               className={"btn-ghost" + (editing ? " ring-1 ring-accent/60" : "")}
-              disabled={busy || !record.bbox}
+              disabled={busy}
               onClick={() => setEditing(!editing)}
-              title="Kısayol: E"
+              title="Kutu veya etiketi düzelt · Kısayol: E"
             >
-              Düzelt (E)
+              Kutu / etiket düzelt (E)
             </button>
           )}
           <button
@@ -375,8 +375,19 @@ function Editor({
 
       {editing && !isSemantic && (
         <div className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-hairline bg-card p-3">
+          <div className="w-full">
+            <div className="text-sm font-semibold text-text">
+              Eğitim etiketi düzeltme
+            </div>
+            <div className="mt-0.5 text-xs text-muted">
+              Yalnız etiketi değiştirebilirsiniz; kutuyu taşımanız gerekmez.
+              Seçenekler aynı modelin güvenli sınıf sözlüğünden gelir.
+            </div>
+          </div>
           <label>
-            <div className="eyebrow mb-1">Sınıf ({record.model_id} sözlüğü)</div>
+            <div className="eyebrow mb-1">
+              Doğru etiket ({record.model_id} sözlüğü)
+            </div>
             <select
               className="field w-56"
               value={klass}
@@ -388,6 +399,13 @@ function Editor({
                 </option>
               ))}
             </select>
+            {classChanged && (
+              <div className="mt-1 text-xs text-accent">
+                {record.type_display_name} →{" "}
+                {modelNode?.types.find((type) => type.class_name === klass)
+                  ?.display_name ?? klass}
+              </div>
+            )}
           </label>
           <label className="min-w-0 flex-1">
             <div className="eyebrow mb-1">Not (isteğe bağlı)</div>

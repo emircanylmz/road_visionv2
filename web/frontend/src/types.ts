@@ -142,3 +142,48 @@ export interface MediaBlobInfo {
   height: number;
   byte_size: number;
 }
+
+export interface DatasetTypeBreakdown {
+  final_type_id: number;
+  final_class_name: string;
+  counts: { correct: number; corrected: number; wrong: number };
+  with_image: number;
+}
+
+export interface DatasetSummary {
+  models: {
+    model_id: string;
+    totals: Partial<Record<"correct" | "corrected" | "wrong", number>>;
+    types: DatasetTypeBreakdown[];
+  }[];
+}
+
+export interface ExportJob {
+  job_id: number;
+  requested_by: number;
+  model_id: string;
+  verdict_scope: "positive" | "wrong";
+  status: "pending" | "running" | "done" | "failed";
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  sample_count: number | null;
+  image_count: number | null;
+  skipped_no_image: number | null;
+  skipped_no_bbox: number | null;
+  byte_size: number | null;
+  error: string | null;
+}
+
+export interface StatsOverview {
+  detections: { total: number; last_24h: number };
+  reviews: {
+    total: number;
+    last_24h: number;
+    verdicts: Partial<Record<"correct" | "corrected" | "wrong", number>>;
+    coverage: number;
+  };
+  dataset: { samples_with_image: number };
+  export_jobs_active: number;
+  models: { model_id: string; detections: number; reviewed: number }[];
+}

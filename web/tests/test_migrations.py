@@ -118,6 +118,21 @@ class EnsureWebappSchemaTests(unittest.TestCase):
             self.assertIn(f"webapp.ds_wrong_{model}", sql)
         self.assertNotIn("REFERENCES public.", sql)
 
+    def test_v4_export_islerini_icerir(self):
+        sql = dict(MIGRATIONS)[4]
+        for parca in (
+            "CREATE TABLE webapp.export_jobs",
+            "'positive', 'wrong'",
+            "'pending', 'running', 'done', 'failed'",
+            "zip_bytes        BYTEA",
+            "REFERENCES webapp.users(user_id)",
+            "export_jobs_created_idx",
+            "CREATE UNIQUE INDEX export_jobs_active_uq",
+            "WHERE status IN ('pending', 'running')",
+        ):
+            self.assertIn(parca, sql)
+        self.assertNotIn("REFERENCES public.", sql)
+
     def test_kilit_ilk_komut_ve_dogru_sabitle_alinir(self):
         conn = FakeConnection(fetch_results=[(1,), (0,)])
         ensure_webapp_schema(conn, migrations=())

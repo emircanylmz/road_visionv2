@@ -4,6 +4,20 @@
 
 ### Eklendi
 
+- Web paneli Faz 5 (RVU-0004): webapp v4 (`export_jobs` — zip çıktısı
+  BYTEA olarak DB'de, tek temas PostgreSQL ilkesi); saf `exportbuild`
+  modülüyle YOLO export (deterministik sınıf haritası, `final_bbox/frame`
+  normalize etiketler, kare başına tek görüntü + çok satırlı etiket,
+  `wrong` kapsamında boş etiketli hard-negative/background, manifest
+  sayımları); arka plan işli `POST /api/datasets/export` + iş listesi/
+  durumu/indirme uçları ve çifte istek/erken indirme 409 korumaları;
+  `GET /api/datasets/summary` kırılımı ve `GET /api/stats/overview` panel
+  kartları; SPA'ya istatistik kartlı, kırılım tablolu ve iş takipli
+  Dataset sayfası; aktif iş yarışını DB seviyesinde engelleyen partial
+  unique indeks; yalnız kendi işaretli exportlarını temizleyen izole kabul
+  betiği `verify_faz5.py`; Doğrulama editöründe kutudan bağımsız, görünür
+  etiket-only düzeltme (ör. `pothole` → `manhole_cover / Rögar kapağı`).
+  Masaüstü kodu ve `public` şeması değişmedi.
 - Web paneli Faz 4 (RVU-0004): webapp v3 (`dataset_media` copy-on-verify
   deposu, karar × model bölümlü `dataset_samples` — 8 yaprak tablo — ve
   corrected_type_id "aynı model sözlüğü" trigger'ı); saf `geometry` (§4.6
