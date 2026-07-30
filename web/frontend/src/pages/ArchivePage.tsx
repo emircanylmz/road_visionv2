@@ -127,9 +127,9 @@ export function ArchivePage() {
     archiveError.code === "archive_unavailable";
 
   return (
-    <div className="flex min-w-0 gap-4">
-      <section className="min-w-0 flex-1">
-        <div className="mb-4 rounded-xl border border-border-soft bg-panel p-3">
+    <div className="flex h-full min-h-0 min-w-0 gap-4">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="mb-4 max-h-[40%] shrink-0 overflow-y-auto overscroll-contain rounded-xl border border-border-soft bg-panel p-3 [scrollbar-gutter:stable]">
           <div className="flex flex-wrap items-end gap-3">
             <label>
               <div className="eyebrow mb-1">Model</div>
@@ -298,63 +298,71 @@ export function ArchivePage() {
           )}
         </div>
 
-        {archiveError ? (
-          <div className="rounded-xl border border-warning/40 bg-warning-bg p-5 text-sm text-warning">
-            {archiveUnavailable
-              ? "Tespit arşivine ulaşılamadı. Masaüstü uygulama PostgreSQL şema sürümü 3 migration'ını en az bir kez çalıştırmış olmalı."
-              : "Tespit arşivi alınamadı. Bağlantıyı denetleyip yeniden deneyin."}
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3">
-              {records.map((record) => (
-                <DetectionCard
-                  key={record.id}
-                  record={record}
-                  selected={selected?.id === record.id}
-                  onSelect={() =>
-                    setSelected(selected?.id === record.id ? null : record)
-                  }
-                />
-              ))}
+        <div
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          aria-label="Arşiv tespitleri"
+          tabIndex={0}
+        >
+          {archiveError ? (
+            <div className="rounded-xl border border-warning/40 bg-warning-bg p-5 text-sm text-warning">
+              {archiveUnavailable
+                ? "Tespit arşivine ulaşılamadı. Masaüstü uygulama PostgreSQL şema sürümü 3 migration'ını en az bir kez çalıştırmış olmalı."
+                : "Tespit arşivi alınamadı. Bağlantıyı denetleyip yeniden deneyin."}
             </div>
-
-            {detections.isPending && (
-              <div className="p-6 text-center text-sm text-muted">
-                Tespitler yükleniyor…
+          ) : (
+            <>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3">
+                {records.map((record) => (
+                  <DetectionCard
+                    key={record.id}
+                    record={record}
+                    selected={selected?.id === record.id}
+                    onSelect={() =>
+                      setSelected(selected?.id === record.id ? null : record)
+                    }
+                  />
+                ))}
               </div>
-            )}
-            {!detections.isPending && records.length === 0 && (
-              <div className="rounded-xl border border-border-soft p-6 text-center text-sm text-muted">
-                Filtreyle eşleşen tespit yok.
-              </div>
-            )}
 
-            <div className="mt-3 flex items-center justify-between text-sm text-muted">
-              <span className="font-mono">{records.length} tespit yüklendi</span>
-              <div className="flex gap-2">
-                <button
-                  className="btn-ghost"
-                  onClick={() => detections.refetch()}
-                  disabled={detections.isRefetching}
-                >
-                  Yenile
-                </button>
-                {detections.hasNextPage && (
+              {detections.isPending && (
+                <div className="p-6 text-center text-sm text-muted">
+                  Tespitler yükleniyor…
+                </div>
+              )}
+              {!detections.isPending && records.length === 0 && (
+                <div className="rounded-xl border border-border-soft p-6 text-center text-sm text-muted">
+                  Filtreyle eşleşen tespit yok.
+                </div>
+              )}
+
+              <div className="mt-3 flex items-center justify-between text-sm text-muted">
+                <span className="font-mono">
+                  {records.length} tespit yüklendi
+                </span>
+                <div className="flex gap-2">
                   <button
                     className="btn-ghost"
-                    onClick={() => detections.fetchNextPage()}
-                    disabled={detections.isFetchingNextPage}
+                    onClick={() => detections.refetch()}
+                    disabled={detections.isRefetching}
                   >
-                    {detections.isFetchingNextPage
-                      ? "Yükleniyor…"
-                      : "Daha eski tespitleri yükle"}
+                    Yenile
                   </button>
-                )}
+                  {detections.hasNextPage && (
+                    <button
+                      className="btn-ghost"
+                      onClick={() => detections.fetchNextPage()}
+                      disabled={detections.isFetchingNextPage}
+                    >
+                      {detections.isFetchingNextPage
+                        ? "Yükleniyor…"
+                        : "Daha eski tespitleri yükle"}
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          </>
-        )}
+            </>
+          )}
+        </div>
       </section>
 
       {selected && (
@@ -444,8 +452,8 @@ function DetectionDrawer({
       : record.original_media_id;
 
   return (
-    <aside className="w-[30rem] shrink-0 self-start rounded-xl border border-border-soft bg-panel">
-      <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
+    <aside className="flex h-full min-h-0 w-[30rem] shrink-0 flex-col rounded-xl border border-border-soft bg-panel">
+      <div className="flex shrink-0 items-center justify-between border-b border-hairline px-4 py-3">
         <div>
           <div className="eyebrow">Tespit ayrıntısı</div>
           <div className="font-mono text-xs text-muted">#{record.id}</div>
@@ -455,7 +463,7 @@ function DetectionDrawer({
         </button>
       </div>
 
-      <div className="p-4 text-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-sm [scrollbar-gutter:stable]">
         {record.capture_id ? (
           <>
             <div className="mb-2 flex gap-1.5">
@@ -488,7 +496,7 @@ function DetectionDrawer({
               <img
                 src={"/api/media/" + mediaId}
                 alt={record.type_display_name}
-                className="mb-3 w-full rounded-lg border border-hairline bg-deep object-contain"
+                className="mb-3 max-h-[45vh] w-full rounded-lg border border-hairline bg-deep object-contain"
               />
             ) : (
               <div className="mb-3 rounded-lg border border-hairline bg-deep p-6 text-center text-xs text-faint">

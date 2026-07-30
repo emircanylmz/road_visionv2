@@ -148,9 +148,9 @@ export function VerifyPage() {
   }, [active, advance, isSemantic, review]);
 
   return (
-    <div className="flex min-w-0 gap-4">
-      <aside className="w-72 shrink-0">
-        <div className="mb-3 rounded-xl border border-border-soft bg-panel p-3">
+    <div className="flex h-full min-h-0 min-w-0 gap-4">
+      <aside className="flex min-h-0 w-72 shrink-0 flex-col">
+        <div className="mb-3 shrink-0 rounded-xl border border-border-soft bg-panel p-3">
           <div className="eyebrow mb-1">Model</div>
           <select
             className="field"
@@ -180,7 +180,11 @@ export function VerifyPage() {
           </label>
         </div>
 
-        <div className="max-h-[70vh] space-y-1.5 overflow-y-auto pr-1">
+        <div
+          className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          aria-label="Doğrulama kuyruğu"
+          tabIndex={0}
+        >
           {records.map((record) => (
             <button
               key={record.id}
@@ -228,9 +232,9 @@ export function VerifyPage() {
         </div>
       </aside>
 
-      <section className="min-w-0 flex-1">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         {flash && (
-          <div className="mb-3 rounded-lg border border-border-soft bg-panel px-3 py-2 text-sm text-soft">
+          <div className="mb-3 shrink-0 rounded-lg border border-border-soft bg-panel px-3 py-2 text-sm text-soft">
             {flash}
           </div>
         )}
@@ -300,8 +304,8 @@ function Editor({
   }
 
   return (
-    <div className="rounded-xl border border-border-soft bg-panel p-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border-soft bg-panel">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-hairline p-4">
         <div>
           <div className="text-sm font-semibold">
             {record.type_display_name}
@@ -316,7 +320,7 @@ function Editor({
             </span>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <button
             className="btn-accent"
             disabled={busy}
@@ -351,85 +355,87 @@ function Editor({
         </div>
       </div>
 
-      {record.original_media_id && frame ? (
-        <BboxCanvas
-          mediaId={record.original_media_id}
-          frameW={frame.width}
-          frameH={frame.height}
-          box={box}
-          editable={editing}
-          onChange={setBox}
-        />
-      ) : record.annotated_media_id ? (
-        <img
-          src={"/api/media/" + record.annotated_media_id}
-          alt={record.type_display_name}
-          className="w-full rounded-lg border border-hairline bg-deep object-contain"
-        />
-      ) : (
-        <div className="rounded-lg border border-hairline bg-deep p-8 text-center text-xs text-faint">
-          Görüntü saklama süresi doldu — karar yine kaydedilir, örnek
-          görüntüsüz işaretlenir.
-        </div>
-      )}
-
-      {editing && !isSemantic && (
-        <div className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-hairline bg-card p-3">
-          <div className="w-full">
-            <div className="text-sm font-semibold text-text">
-              Eğitim etiketi düzeltme
-            </div>
-            <div className="mt-0.5 text-xs text-muted">
-              Yalnız etiketi değiştirebilirsiniz; kutuyu taşımanız gerekmez.
-              Seçenekler aynı modelin güvenli sınıf sözlüğünden gelir.
-            </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 [scrollbar-gutter:stable]">
+        {record.original_media_id && frame ? (
+          <BboxCanvas
+            mediaId={record.original_media_id}
+            frameW={frame.width}
+            frameH={frame.height}
+            box={box}
+            editable={editing}
+            onChange={setBox}
+          />
+        ) : record.annotated_media_id ? (
+          <img
+            src={"/api/media/" + record.annotated_media_id}
+            alt={record.type_display_name}
+            className="w-full rounded-lg border border-hairline bg-deep object-contain"
+          />
+        ) : (
+          <div className="rounded-lg border border-hairline bg-deep p-8 text-center text-xs text-faint">
+            Görüntü saklama süresi doldu — karar yine kaydedilir, örnek
+            görüntüsüz işaretlenir.
           </div>
-          <label>
-            <div className="eyebrow mb-1">
-              Doğru etiket ({record.model_id} sözlüğü)
+        )}
+
+        {editing && !isSemantic && (
+          <div className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-hairline bg-card p-3">
+            <div className="w-full">
+              <div className="text-sm font-semibold text-text">
+                Eğitim etiketi düzeltme
+              </div>
+              <div className="mt-0.5 text-xs text-muted">
+                Yalnız etiketi değiştirebilirsiniz; kutuyu taşımanız gerekmez.
+                Seçenekler aynı modelin güvenli sınıf sözlüğünden gelir.
+              </div>
             </div>
-            <select
-              className="field w-56"
-              value={klass}
-              onChange={(event) => setKlass(event.target.value)}
-            >
-              {(modelNode?.types ?? []).map((type) => (
-                <option key={type.type_id} value={type.class_name}>
-                  {type.display_name}
-                </option>
-              ))}
-            </select>
-            {classChanged && (
-              <div className="mt-1 text-xs text-accent">
-                {record.type_display_name} →{" "}
-                {modelNode?.types.find((type) => type.class_name === klass)
-                  ?.display_name ?? klass}
+            <label>
+              <div className="eyebrow mb-1">
+                Doğru etiket ({record.model_id} sözlüğü)
+              </div>
+              <select
+                className="field w-56"
+                value={klass}
+                onChange={(event) => setKlass(event.target.value)}
+              >
+                {(modelNode?.types ?? []).map((type) => (
+                  <option key={type.type_id} value={type.class_name}>
+                    {type.display_name}
+                  </option>
+                ))}
+              </select>
+              {classChanged && (
+                <div className="mt-1 text-xs text-accent">
+                  {record.type_display_name} →{" "}
+                  {modelNode?.types.find((type) => type.class_name === klass)
+                    ?.display_name ?? klass}
+                </div>
+              )}
+            </label>
+            <label className="min-w-0 flex-1">
+              <div className="eyebrow mb-1">Not (isteğe bağlı)</div>
+              <input
+                className="field"
+                value={note}
+                maxLength={2000}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            </label>
+            {box && (
+              <div className="font-mono text-xs text-muted">
+                [{box.map((value) => value.toFixed(0)).join(", ")}]
               </div>
             )}
-          </label>
-          <label className="min-w-0 flex-1">
-            <div className="eyebrow mb-1">Not (isteğe bağlı)</div>
-            <input
-              className="field"
-              value={note}
-              maxLength={2000}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </label>
-          {box && (
-            <div className="font-mono text-xs text-muted">
-              [{box.map((value) => value.toFixed(0)).join(", ")}]
-            </div>
-          )}
-          <button
-            className="btn-accent"
-            disabled={busy || (!boxChanged && !classChanged)}
-            onClick={saveCorrection}
-          >
-            Düzeltmeyi kaydet
-          </button>
-        </div>
-      )}
+            <button
+              className="btn-accent"
+              disabled={busy || (!boxChanged && !classChanged)}
+              onClick={saveCorrection}
+            >
+              Düzeltmeyi kaydet
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

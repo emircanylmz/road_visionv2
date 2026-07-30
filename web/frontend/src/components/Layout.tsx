@@ -4,7 +4,7 @@
 
 import type { ReactNode } from "react";
 import { useLogout, useUser } from "../auth";
-import { NavLink, useNavigate } from "../router";
+import { NavLink, useNavigate, usePathname } from "../router";
 
 function RailLink({
   to,
@@ -40,10 +40,13 @@ export function Layout({ children }: { children: ReactNode }) {
   const user = useUser();
   const logout = useLogout();
   const navigate = useNavigate();
+  const pathname = usePathname();
+  const usesFixedWorkspace =
+    pathname === "/arsiv" || pathname === "/dogrulama";
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-[72px] flex-col items-center gap-2 border-r border-hairline bg-rail py-3">
+    <div className="flex h-dvh overflow-hidden">
+      <aside className="flex min-h-0 w-[72px] flex-col items-center gap-2 overflow-y-auto border-r border-hairline bg-rail py-3">
         <div
           className="mb-2 grid h-10 w-10 place-items-center rounded-lg bg-accent font-mono text-sm font-bold text-accent-ink"
           title="RoadVision"
@@ -60,7 +63,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-hairline bg-panel px-5 py-3">
+        <header className="flex shrink-0 items-center justify-between border-b border-hairline bg-panel px-5 py-3">
           <div>
             <div className="eyebrow">RoadVision</div>
             <div className="text-sm font-semibold tracking-tight">
@@ -93,7 +96,14 @@ export function Layout({ children }: { children: ReactNode }) {
             </button>
           </div>
         </header>
-        <main className="min-w-0 flex-1 p-5">{children}</main>
+        <main
+          className={
+            "min-h-0 min-w-0 flex-1 p-5 " +
+            (usesFixedWorkspace ? "overflow-hidden" : "overflow-y-auto")
+          }
+        >
+          {children}
+        </main>
       </div>
     </div>
   );
