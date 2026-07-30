@@ -98,5 +98,3 @@ class SlidingWindowLimiter:
                 bucket.popleft()
             if not bucket:
                 del self._events[key]
-        if len(self._events) < self._max_tracked_keys:
-            return
