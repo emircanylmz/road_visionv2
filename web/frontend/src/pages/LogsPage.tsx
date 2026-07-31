@@ -90,9 +90,9 @@ export function LogsPage() {
   }
 
   return (
-    <div className="flex min-w-0 gap-4">
-      <section className="min-w-0 flex-1">
-        <div className="mb-4 rounded-xl border border-border-soft bg-panel p-3">
+    <div className="flex h-full min-h-0 min-w-0 gap-4">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="mb-4 max-h-[40%] shrink-0 overflow-y-auto overscroll-contain rounded-xl border border-border-soft bg-panel p-3 [scrollbar-gutter:stable]">
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <div className="eyebrow mb-1">Seviye</div>
@@ -215,9 +215,13 @@ export function LogsPage() {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border-soft">
-          <table className="w-full text-sm">
-            <thead className="bg-panel">
+        <div
+          className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-xl border border-border-soft [scrollbar-gutter:stable]"
+          aria-label="Log kayıtları"
+          tabIndex={0}
+        >
+          <table className="w-full min-w-[48rem] text-sm">
+            <thead className="sticky top-0 z-10 bg-panel">
               <tr className="text-left">
                 <th className="eyebrow px-3 py-2 font-semibold">Zaman</th>
                 <th className="eyebrow px-3 py-2 font-semibold">Seviye</th>
@@ -260,7 +264,7 @@ export function LogsPage() {
           )}
         </div>
 
-        <div className="mt-3 flex items-center justify-between text-sm text-muted">
+        <div className="mt-3 flex shrink-0 items-center justify-between text-sm text-muted">
           <span className="font-mono">{records.length} kayıt yüklendi</span>
           <div className="flex gap-2">
             <button
@@ -342,8 +346,8 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const record = detail.data?.record;
 
   return (
-    <aside className="w-[26rem] shrink-0 self-start rounded-xl border border-border-soft bg-panel">
-      <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
+    <aside className="flex h-full min-h-0 w-[26rem] shrink-0 flex-col rounded-xl border border-border-soft bg-panel">
+      <div className="flex shrink-0 items-center justify-between border-b border-hairline px-4 py-3">
         <div>
           <div className="eyebrow">Kayıt ayrıntısı</div>
           <div className="font-mono text-xs text-muted">#{id}</div>
@@ -352,7 +356,7 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
           Kapat
         </button>
       </div>
-      <div className="p-4 text-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-sm [scrollbar-gutter:stable]">
         {detail.isPending && <div className="text-muted">Yükleniyor…</div>}
         {detail.isError && (
           <div className="text-danger">Ayrıntı alınamadı.</div>

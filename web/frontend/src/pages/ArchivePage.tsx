@@ -4,7 +4,8 @@
 // karar satırı olmayan her tespit "doğrulanmadı"dır — yeni tespitler
 // kendiliğinden bu kuyruğa düşer. Karar verme uçları Faz 4'te gelir.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, ApiError, formatTs } from "../api";
 import type {
@@ -440,6 +441,7 @@ function DetectionDrawer({
   onClose: () => void;
 }) {
   const [view, setView] = useState<"annotated" | "original">("annotated");
+  const [expanded, setExpanded] = useState(false);
   const capture = useQuery({
     queryKey: ["capture", record.capture_id],
     queryFn: () => api<CaptureDetail>("/api/captures/" + record.capture_id),
@@ -450,6 +452,18 @@ function DetectionDrawer({
     view === "annotated"
       ? record.annotated_media_id
       : record.original_media_id;
+  const viewLabel = view === "annotated" ? "İşaretli kare" : "Orijinal kare";
+
+  useEffect(() => setExpanded(false), [record.id]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setExpanded(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
 
   return (
     <aside className="flex h-full min-h-0 w-[30rem] shrink-0 flex-col rounded-xl border border-border-soft bg-panel">
@@ -493,11 +507,21 @@ function DetectionDrawer({
               </button>
             </div>
             {mediaId ? (
-              <img
-                src={"/api/media/" + mediaId}
-                alt={record.type_display_name}
-                className="mb-3 max-h-[45vh] w-full rounded-lg border border-hairline bg-deep object-contain"
-              />
+              <button
+                type="button"
+                className="group relative mb-3 block w-full overflow-hidden rounded-lg border border-hairline bg-deep"
+                onClick={() => setExpanded(true)}
+                aria-label={`${viewLabel}: tam ekran görüntüle`}
+              >
+                <img
+                  src={"/api/media/" + mediaId}
+                  alt={record.type_display_name}
+                  className="max-h-[45vh] w-full object-contain"
+                />
+                <span className="absolute bottom-2 right-2 rounded-md border border-chipline bg-panel/90 px-2.5 py-1.5 text-xs font-semibold text-soft shadow-lg backdrop-blur-sm group-hover:text-text">
+                  ⛶ Tam ekran görüntüle
+                </span>
+              </button>
             ) : (
               <div className="mb-3 rounded-lg border border-hairline bg-deep p-6 text-center text-xs text-faint">
                 Görüntü saklama süresi doldu
@@ -584,6 +608,286 @@ function DetectionDrawer({
           )}
         </div>
       </div>
+
+      {expanded && mediaId && info && (
+        <ArchiveLightbox
+          record={record}
+          view={view}
+          onViewChange={setView}
+          originalMediaId={record.original_media_id}
+          annotatedMediaId={record.annotated_media_id}
+          originalFrame={info.original}
+          annotatedFrame={info.annotated}
+          onClose={() => setExpanded(false)}
+        />
+      )}
     </aside>
+  );
+}
+
+interface ArchiveViewport {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
+const ARCHIVE_MIN_ZOOM = 1;
+const ARCHIVE_MAX_ZOOM = 4;
+const ARCHIVE_ZOOM_STEP = 0.5;
+
+function ArchiveLightbox({
+  record,
+  view,
+  onViewChange,
+  originalMediaId,
+  annotatedMediaId,
+  originalFrame,
+  annotatedFrame,
+  onClose,
+}: {
+  record: DetectionRow;
+  view: "annotated" | "original";
+  onViewChange: (view: "annotated" | "original") => void;
+  originalMediaId: number | null;
+  annotatedMediaId: number | null;
+  originalFrame: CaptureDetail["capture"]["original"];
+  annotatedFrame: CaptureDetail["capture"]["annotated"];
+  onClose: () => void;
+}) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    viewport: ArchiveViewport;
+  } | null>(null);
+  const [viewport, setViewport] = useState<ArchiveViewport>({
+    zoom: ARCHIVE_MIN_ZOOM,
+    x: 0,
+    y: 0,
+  });
+  const mediaId =
+    view === "annotated" ? annotatedMediaId : originalMediaId;
+  const frame = view === "annotated" ? annotatedFrame : originalFrame;
+  const viewLabel = view === "annotated" ? "İşaretli kare" : "Orijinal kare";
+  const viewW = frame.width / viewport.zoom;
+  const viewH = frame.height / viewport.zoom;
+
+  useEffect(() => {
+    setViewport({ zoom: ARCHIVE_MIN_ZOOM, x: 0, y: 0 });
+    dragRef.current = null;
+  }, [view, mediaId, frame.width, frame.height]);
+
+  function clamp(value: number, max: number) {
+    return Math.min(Math.max(value, 0), Math.max(0, max));
+  }
+
+  function changeZoom(delta: number) {
+    setViewport((current) => {
+      const zoom = Math.min(
+        ARCHIVE_MAX_ZOOM,
+        Math.max(ARCHIVE_MIN_ZOOM, current.zoom + delta),
+      );
+      if (zoom === current.zoom) return current;
+
+      const currentW = frame.width / current.zoom;
+      const currentH = frame.height / current.zoom;
+      const nextW = frame.width / zoom;
+      const nextH = frame.height / zoom;
+      const centerX = current.x + currentW / 2;
+      const centerY = current.y + currentH / 2;
+      return {
+        zoom,
+        x: clamp(centerX - nextW / 2, frame.width - nextW),
+        y: clamp(centerY - nextH / 2, frame.height - nextH),
+      };
+    });
+  }
+
+  function resetViewport() {
+    setViewport({ zoom: ARCHIVE_MIN_ZOOM, x: 0, y: 0 });
+    dragRef.current = null;
+  }
+
+  function switchView(nextView: "annotated" | "original") {
+    if (nextView === view) return;
+    resetViewport();
+    onViewChange(nextView);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const drag = dragRef.current;
+    if (!drag || !svgRef.current) return;
+
+    const rect = svgRef.current.getBoundingClientRect();
+    const dragViewW = frame.width / drag.viewport.zoom;
+    const dragViewH = frame.height / drag.viewport.zoom;
+    const scale = Math.min(
+      rect.width / dragViewW,
+      rect.height / dragViewH,
+    );
+    setViewport({
+      ...drag.viewport,
+      x: clamp(
+        drag.viewport.x -
+          (event.clientX - drag.startClientX) / scale,
+        frame.width - dragViewW,
+      ),
+      y: clamp(
+        drag.viewport.y -
+          (event.clientY - drag.startClientY) / scale,
+        frame.height - dragViewH,
+      ),
+    });
+  }
+
+  function endDrag(event: ReactPointerEvent<SVGSVGElement>) {
+    dragRef.current = null;
+    (event.target as Element).releasePointerCapture?.(event.pointerId);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-deep/80 p-5 backdrop-blur-md"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${record.type_display_name} tam ekran görüntüsü`}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-panel/95 shadow-2xl">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-hairline px-4 py-3">
+          <div className="mr-auto min-w-40">
+            <div className="text-sm font-semibold">
+              {record.type_display_name}
+            </div>
+            <div className="text-xs text-muted">
+              {viewLabel} · #{record.id}
+            </div>
+          </div>
+
+          <div
+            className="flex items-center gap-1.5"
+            aria-label="Arşiv görüntüsü seçimi"
+          >
+            <button
+              type="button"
+              className={
+                "chip " +
+                (view === "annotated"
+                  ? "bg-hover text-text ring-1 ring-accent/60"
+                  : "opacity-70 hover:opacity-100")
+              }
+              disabled={!annotatedMediaId}
+              onClick={() => switchView("annotated")}
+            >
+              İşaretli kare
+            </button>
+            <button
+              type="button"
+              className={
+                "chip " +
+                (view === "original"
+                  ? "bg-hover text-text ring-1 ring-accent/60"
+                  : "opacity-70 hover:opacity-100")
+              }
+              disabled={!originalMediaId}
+              onClick={() => switchView("original")}
+            >
+              Orijinal kare
+            </button>
+          </div>
+
+          <div
+            className="flex items-center gap-1.5 rounded-lg border border-hairline bg-card px-2 py-1"
+            aria-label="Tam ekran yakınlaştırma kontrolleri"
+          >
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={viewport.zoom <= ARCHIVE_MIN_ZOOM}
+              onClick={() => changeZoom(-ARCHIVE_ZOOM_STEP)}
+              aria-label="Uzaklaştır"
+            >
+              −
+            </button>
+            <span className="w-12 text-center font-mono text-xs text-soft">
+              %{Math.round(viewport.zoom * 100)}
+            </span>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={viewport.zoom >= ARCHIVE_MAX_ZOOM}
+              onClick={() => changeZoom(ARCHIVE_ZOOM_STEP)}
+              aria-label="Yakınlaştır"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={viewport.zoom === ARCHIVE_MIN_ZOOM}
+              onClick={resetViewport}
+            >
+              Görünümü sıfırla
+            </button>
+          </div>
+
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Tam ekranı kapat
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col bg-deep p-3">
+          <div className="mb-2 shrink-0 text-center text-xs text-muted">
+            {viewport.zoom > ARCHIVE_MIN_ZOOM
+              ? "Fotoğrafı sürükleyerek kaydırabilirsiniz"
+              : "Yakınlaştırınca fotoğrafı sürükleyebilirsiniz"}
+          </div>
+          {mediaId ? (
+            <svg
+              ref={svgRef}
+              viewBox={`${viewport.x} ${viewport.y} ${viewW} ${viewH}`}
+              preserveAspectRatio="xMidYMid meet"
+              className="min-h-0 w-full flex-1 touch-none select-none rounded-lg border border-hairline bg-deep"
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onPointerLeave={endDrag}
+            >
+              <image
+                href={"/api/media/" + mediaId}
+                width={frame.width}
+                height={frame.height}
+                preserveAspectRatio="none"
+                style={{
+                  cursor:
+                    viewport.zoom > ARCHIVE_MIN_ZOOM ? "grab" : "default",
+                }}
+                onPointerDown={
+                  viewport.zoom > ARCHIVE_MIN_ZOOM
+                    ? (event) => {
+                        dragRef.current = {
+                          startClientX: event.clientX,
+                          startClientY: event.clientY,
+                          viewport: { ...viewport },
+                        };
+                        (event.target as Element).setPointerCapture(
+                          event.pointerId,
+                        );
+                        event.preventDefault();
+                      }
+                    : undefined
+                }
+              />
+            </svg>
+          ) : (
+            <div className="grid min-h-0 flex-1 place-items-center rounded-lg border border-hairline text-xs text-faint">
+              Görüntü saklama süresi doldu
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

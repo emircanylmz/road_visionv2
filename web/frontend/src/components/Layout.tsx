@@ -42,7 +42,9 @@ export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const pathname = usePathname();
   const usesFixedWorkspace =
-    pathname === "/arsiv" || pathname === "/dogrulama";
+    pathname === "/loglar" ||
+    pathname === "/arsiv" ||
+    pathname === "/dogrulama";
 
   return (
     <div className="flex h-dvh overflow-hidden">
