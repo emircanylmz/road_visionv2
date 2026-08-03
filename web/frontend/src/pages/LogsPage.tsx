@@ -1,6 +1,6 @@
 // Loglar sayfası: masaüstü Oturum Günlüğü'nün kalıcı (PostgreSQL) karşılığı.
-// Filtreler taslak/uygula ayrımıyla çalışır (masaüstü arşivindeki draft/
-// applied deseni); liste (ts,id) keyset imleciyle "daha eski" yönünde büyür.
+// Filtreler seçim anında sorguya yansır; liste (ts,id) keyset imleciyle
+// "daha eski" yönünde büyür.
 
 import { useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -57,8 +57,7 @@ function toQuery(filters: Filters, cursor: string | null): string {
 }
 
 export function LogsPage() {
-  const [draft, setDraft] = useState<Filters>(EMPTY);
-  const [applied, setApplied] = useState<Filters>(EMPTY);
+  const [filters, setFilters] = useState<Filters>(EMPTY);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const models = useQuery({
@@ -68,9 +67,9 @@ export function LogsPage() {
   });
 
   const logs = useInfiniteQuery({
-    queryKey: ["logs", applied],
+    queryKey: ["logs", filters],
     queryFn: ({ pageParam }) =>
-      api<LogPage>("/api/logs?" + toQuery(applied, pageParam)),
+      api<LogPage>("/api/logs?" + toQuery(filters, pageParam)),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -80,8 +79,13 @@ export function LogsPage() {
     [logs.data],
   );
 
+  function updateFilters(update: (current: Filters) => Filters) {
+    setFilters(update);
+    setSelectedId(null);
+  }
+
   function toggleLevel(level: LogLevel) {
-    setDraft((current) => ({
+    updateFilters((current) => ({
       ...current,
       levels: current.levels.includes(level)
         ? current.levels.filter((item) => item !== level)
@@ -105,7 +109,7 @@ export function LogsPage() {
                     className={
                       "chip " +
                       LEVEL_STYLE[level] +
-                      (draft.levels.includes(level)
+                      (filters.levels.includes(level)
                         ? " bg-hover ring-1 ring-accent/60"
                         : " opacity-70 hover:opacity-100")
                     }
@@ -120,13 +124,11 @@ export function LogsPage() {
               <div className="eyebrow mb-1">Kategori</div>
               <select
                 className="field w-36"
-                value={draft.category}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    category: event.target.value as Filters["category"],
-                  })
-                }
+                value={filters.category}
+                onChange={(event) => {
+                  const category = event.target.value as Filters["category"];
+                  updateFilters((current) => ({ ...current, category }));
+                }}
               >
                 <option value="">Tümü</option>
                 <option value="app">app</option>
@@ -138,10 +140,11 @@ export function LogsPage() {
               <div className="eyebrow mb-1">Model</div>
               <select
                 className="field w-52"
-                value={draft.modelId}
-                onChange={(event) =>
-                  setDraft({ ...draft, modelId: event.target.value })
-                }
+                value={filters.modelId}
+                onChange={(event) => {
+                  const modelId = event.target.value;
+                  updateFilters((current) => ({ ...current, modelId }));
+                }}
               >
                 <option value="">Tümü</option>
                 {(models.data?.models ?? []).map((model) => (
@@ -158,10 +161,11 @@ export function LogsPage() {
                 className="field w-28 font-mono"
                 type="number"
                 min={1}
-                value={draft.runId}
-                onChange={(event) =>
-                  setDraft({ ...draft, runId: event.target.value })
-                }
+                value={filters.runId}
+                onChange={(event) => {
+                  const runId = event.target.value;
+                  updateFilters((current) => ({ ...current, runId }));
+                }}
                 placeholder="tümü"
               />
             </label>
@@ -171,10 +175,11 @@ export function LogsPage() {
               <input
                 className="field w-52"
                 type="datetime-local"
-                value={draft.tsFrom}
-                onChange={(event) =>
-                  setDraft({ ...draft, tsFrom: event.target.value })
-                }
+                value={filters.tsFrom}
+                onChange={(event) => {
+                  const tsFrom = event.target.value;
+                  updateFilters((current) => ({ ...current, tsFrom }));
+                }}
               />
             </label>
             <label>
@@ -182,10 +187,11 @@ export function LogsPage() {
               <input
                 className="field w-52"
                 type="datetime-local"
-                value={draft.tsTo}
-                onChange={(event) =>
-                  setDraft({ ...draft, tsTo: event.target.value })
-                }
+                value={filters.tsTo}
+                onChange={(event) => {
+                  const tsTo = event.target.value;
+                  updateFilters((current) => ({ ...current, tsTo }));
+                }}
               />
             </label>
 
@@ -194,22 +200,11 @@ export function LogsPage() {
                 className="btn-ghost"
                 type="button"
                 onClick={() => {
-                  setDraft(EMPTY);
-                  setApplied(EMPTY);
+                  setFilters(EMPTY);
                   setSelectedId(null);
                 }}
               >
                 Sıfırla
-              </button>
-              <button
-                className="btn-accent"
-                type="button"
-                onClick={() => {
-                  setApplied(draft);
-                  setSelectedId(null);
-                }}
-              >
-                Filtreyi uygula
               </button>
             </div>
           </div>

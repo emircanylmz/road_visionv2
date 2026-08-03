@@ -73,8 +73,7 @@ function toQuery(filters: Filters, cursor: string | null): string {
 }
 
 export function ArchivePage() {
-  const [draft, setDraft] = useState<Filters>(EMPTY);
-  const [applied, setApplied] = useState<Filters>(EMPTY);
+  const [filters, setFilters] = useState<Filters>(EMPTY);
   const [selected, setSelected] = useState<DetectionRow | null>(null);
 
   const tree = useQuery({
@@ -84,9 +83,9 @@ export function ArchivePage() {
   });
 
   const detections = useInfiniteQuery({
-    queryKey: ["archive", applied],
+    queryKey: ["archive", filters],
     queryFn: ({ pageParam }) =>
-      api<DetectionPage>("/api/archive/detections?" + toQuery(applied, pageParam)),
+      api<DetectionPage>("/api/archive/detections?" + toQuery(filters, pageParam)),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -100,11 +99,16 @@ export function ArchivePage() {
   );
 
   const selectedModel = tree.data?.models.find(
-    (model) => model.model_id === draft.modelId,
+    (model) => model.model_id === filters.modelId,
   );
 
+  function updateFilters(update: (current: Filters) => Filters) {
+    setFilters(update);
+    setSelected(null);
+  }
+
   function toggleType(typeId: number) {
-    setDraft((current) => ({
+    updateFilters((current) => ({
       ...current,
       typeIds: current.typeIds.includes(typeId)
         ? current.typeIds.filter((item) => item !== typeId)
@@ -113,7 +117,7 @@ export function ArchivePage() {
   }
 
   function toggleReview(status: ReviewStatus) {
-    setDraft((current) => ({
+    updateFilters((current) => ({
       ...current,
       reviewStatuses: current.reviewStatuses.includes(status)
         ? current.reviewStatuses.filter((item) => item !== status)
@@ -136,14 +140,15 @@ export function ArchivePage() {
               <div className="eyebrow mb-1">Model</div>
               <select
                 className="field w-56"
-                value={draft.modelId}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    modelId: event.target.value,
+                value={filters.modelId}
+                onChange={(event) => {
+                  const modelId = event.target.value;
+                  updateFilters((current) => ({
+                    ...current,
+                    modelId,
                     typeIds: [],
-                  })
-                }
+                  }));
+                }}
               >
                 <option value="">Tümü</option>
                 {(tree.data?.models ?? []).map((model) => (
@@ -166,7 +171,7 @@ export function ArchivePage() {
                       className={
                         "chip " +
                         REVIEW_STYLE[status] +
-                        (draft.reviewStatuses.includes(status)
+                        (filters.reviewStatuses.includes(status)
                           ? " ring-1 ring-accent/60"
                           : " opacity-70 hover:opacity-100")
                       }
@@ -187,10 +192,14 @@ export function ArchivePage() {
                 max={1}
                 step={0.05}
                 placeholder="0.00"
-                value={draft.minConfidence}
-                onChange={(event) =>
-                  setDraft({ ...draft, minConfidence: event.target.value })
-                }
+                value={filters.minConfidence}
+                onChange={(event) => {
+                  const minConfidence = event.target.value;
+                  updateFilters((current) => ({
+                    ...current,
+                    minConfidence,
+                  }));
+                }}
               />
             </label>
 
@@ -201,10 +210,11 @@ export function ArchivePage() {
                 type="number"
                 min={1}
                 placeholder="tümü"
-                value={draft.runId}
-                onChange={(event) =>
-                  setDraft({ ...draft, runId: event.target.value })
-                }
+                value={filters.runId}
+                onChange={(event) => {
+                  const runId = event.target.value;
+                  updateFilters((current) => ({ ...current, runId }));
+                }}
               />
             </label>
 
@@ -213,10 +223,11 @@ export function ArchivePage() {
               <input
                 className="field w-52"
                 type="datetime-local"
-                value={draft.tsFrom}
-                onChange={(event) =>
-                  setDraft({ ...draft, tsFrom: event.target.value })
-                }
+                value={filters.tsFrom}
+                onChange={(event) => {
+                  const tsFrom = event.target.value;
+                  updateFilters((current) => ({ ...current, tsFrom }));
+                }}
               />
             </label>
             <label>
@@ -224,20 +235,25 @@ export function ArchivePage() {
               <input
                 className="field w-52"
                 type="datetime-local"
-                value={draft.tsTo}
-                onChange={(event) =>
-                  setDraft({ ...draft, tsTo: event.target.value })
-                }
+                value={filters.tsTo}
+                onChange={(event) => {
+                  const tsTo = event.target.value;
+                  updateFilters((current) => ({ ...current, tsTo }));
+                }}
               />
             </label>
 
             <label className="flex items-center gap-2 pb-2 text-sm text-soft">
               <input
                 type="checkbox"
-                checked={draft.onlyWithImage}
-                onChange={(event) =>
-                  setDraft({ ...draft, onlyWithImage: event.target.checked })
-                }
+                checked={filters.onlyWithImage}
+                onChange={(event) => {
+                  const onlyWithImage = event.target.checked;
+                  updateFilters((current) => ({
+                    ...current,
+                    onlyWithImage,
+                  }));
+                }}
               />
               Yalnız görüntülü
             </label>
@@ -247,22 +263,11 @@ export function ArchivePage() {
                 className="btn-ghost"
                 type="button"
                 onClick={() => {
-                  setDraft(EMPTY);
-                  setApplied(EMPTY);
+                  setFilters(EMPTY);
                   setSelected(null);
                 }}
               >
                 Sıfırla
-              </button>
-              <button
-                className="btn-accent"
-                type="button"
-                onClick={() => {
-                  setApplied(draft);
-                  setSelected(null);
-                }}
-              >
-                Filtreyi uygula
               </button>
             </div>
           </div>
@@ -280,7 +285,7 @@ export function ArchivePage() {
                     onClick={() => toggleType(type.type_id)}
                     className={
                       "chip " +
-                      (draft.typeIds.includes(type.type_id)
+                      (filters.typeIds.includes(type.type_id)
                         ? "bg-hover text-text ring-1 ring-accent/60"
                         : "opacity-70 hover:opacity-100")
                     }

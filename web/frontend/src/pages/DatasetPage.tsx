@@ -14,10 +14,24 @@ import type {
   StatsOverview,
 } from "../types";
 
-const VERDICT_LABEL: Record<string, string> = {
-  correct: "Doğru",
-  corrected: "Düzeltildi",
-  wrong: "Yanlış",
+const VERDICTS = ["correct", "corrected", "wrong"] as const;
+
+const VERDICT_META: Record<
+  (typeof VERDICTS)[number],
+  { label: string; style: string }
+> = {
+  correct: {
+    label: "Doğru",
+    style: "border-ok-border bg-ok-bg text-ok-text",
+  },
+  corrected: {
+    label: "Düzeltildi",
+    style: "border-warning/40 bg-warning-bg text-warning",
+  },
+  wrong: {
+    label: "Yanlış",
+    style: "border-danger/40 bg-danger-bg text-danger",
+  },
 };
 
 const STATUS_LABEL: Record<ExportJob["status"], string> = {
@@ -134,58 +148,97 @@ export function DatasetPage() {
             Henüz doğrulanmış örnek yok — Doğrulama sekmesinden karar verin.
           </div>
         ) : (
-          models.map((model) => (
-            <div key={model.model_id} className="mb-4 last:mb-0">
-              <div className="mb-1.5 flex items-baseline gap-2">
-                <span className="font-mono text-sm text-text">
-                  {model.model_id}
-                </span>
-                <span className="text-xs text-muted">
-                  {Object.entries(model.totals)
-                    .map(
-                      ([verdict, count]) =>
-                        `${VERDICT_LABEL[verdict] ?? verdict}: ${count}`,
-                    )
-                    .join(" · ")}
-                </span>
+          <div className="space-y-4">
+            {models.map((model) => (
+              <div
+                key={model.model_id}
+                className="overflow-hidden rounded-lg border border-border-soft"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-card px-3 py-2.5">
+                  <div>
+                    <div className="eyebrow">Model</div>
+                    <div className="mt-0.5 font-mono text-sm text-text">
+                      {model.model_id}
+                    </div>
+                  </div>
+                  <div
+                    className="grid grid-cols-3 gap-2"
+                    aria-label={`${model.model_id} karar toplamları`}
+                  >
+                    {VERDICTS.map((verdict) => (
+                      <div
+                        key={verdict}
+                        className={
+                          "grid min-w-28 grid-cols-[1fr_auto] items-center gap-3 rounded-md border px-2.5 py-1.5 " +
+                          VERDICT_META[verdict].style
+                        }
+                      >
+                        <span className="text-xs font-medium">
+                          {VERDICT_META[verdict].label}
+                        </span>
+                        <span className="font-mono text-sm font-semibold tabular-nums">
+                          {model.totals[verdict] ?? 0}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[40rem] table-fixed text-sm">
+                    <colgroup>
+                      <col className="w-[40%]" />
+                      <col className="w-[15%]" />
+                      <col className="w-[15%]" />
+                      <col className="w-[15%]" />
+                      <col className="w-[15%]" />
+                    </colgroup>
+                    <thead className="bg-panel">
+                      <tr className="border-b border-hairline text-xs text-faint">
+                        <th className="px-3 py-2 text-left font-medium">
+                          Nihai sınıf
+                        </th>
+                        {VERDICTS.map((verdict) => (
+                          <th
+                            key={verdict}
+                            className="px-2 py-2 text-center font-medium"
+                          >
+                            {VERDICT_META[verdict].label}
+                          </th>
+                        ))}
+                        <th className="px-2 py-2 text-center font-medium">
+                          Görüntülü
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {model.types.map((type) => (
+                        <tr
+                          key={type.final_type_id}
+                          className="border-b border-hairline/50 last:border-0 hover:bg-hover/40"
+                        >
+                          <td className="break-words px-3 py-2 text-soft">
+                            {type.final_class_name}
+                          </td>
+                          {VERDICTS.map((verdict) => (
+                            <td
+                              key={verdict}
+                              className="px-2 py-2 text-center font-mono text-soft tabular-nums"
+                            >
+                              {type.counts[verdict] || "—"}
+                            </td>
+                          ))}
+                          <td className="px-2 py-2 text-center font-mono text-soft tabular-nums">
+                            {type.with_image}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-hairline text-left text-xs text-faint">
-                    <th className="py-1 pr-2 font-medium">Nihai sınıf</th>
-                    <th className="py-1 pr-2 text-right font-medium">Doğru</th>
-                    <th className="py-1 pr-2 text-right font-medium">
-                      Düzeltildi
-                    </th>
-                    <th className="py-1 pr-2 text-right font-medium">Yanlış</th>
-                    <th className="py-1 text-right font-medium">Görüntülü</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {model.types.map((type) => (
-                    <tr
-                      key={type.final_type_id}
-                      className="border-b border-hairline/50 last:border-0"
-                    >
-                      <td className="py-1 pr-2">{type.final_class_name}</td>
-                      <td className="py-1 pr-2 text-right font-mono">
-                        {type.counts.correct || "—"}
-                      </td>
-                      <td className="py-1 pr-2 text-right font-mono">
-                        {type.counts.corrected || "—"}
-                      </td>
-                      <td className="py-1 pr-2 text-right font-mono">
-                        {type.counts.wrong || "—"}
-                      </td>
-                      <td className="py-1 text-right font-mono">
-                        {type.with_image}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))
+            ))}
+          </div>
         )}
       </section>
 
